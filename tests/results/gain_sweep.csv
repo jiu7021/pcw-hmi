@@ -1,0 +1,5 @@
+gainSet,oKp,oKi,oKd,iKp,iKi,iKd,upStepPeakDeviationC,upStepRecoveryTimeS,downStepPeakDeviationC,downStepRecoveryTimeS,stagingToggles,togglesPerMin,invariantViolations
+Conservative(외부Kp -50%),20,2,0,0.15,0.08,0,3.93,383,3.93,183,4,0.48,0
+Default(기본값),40,4,0,0.3,0.15,0,3.229,287.5,2.756,87.5,3,0.36,0
+Aggressive(외부Kp +100%),80,8,0,0.6,0.3,0,2.136,234.8,1.809,34.8,3,0.36,0
+"PID(D항 추가, Kd=20)",40,4,20,0.3,0.15,0,3.194,288.7,2.744,88.7,3,0.36,0

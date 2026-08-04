@@ -1,0 +1,7 @@
+scenario,durationS,stagingToggles,togglesPerMin,huntingSuspected,huntingThresholdPerMin,maxPumpRuntimeHDiff,maxPumpStartCountDiff
+A_normal_load_cycle,600,3,0.3,false,1.333,0.0097,0
+B_load_step,500,3,0.36,false,1.333,0.0097,0
+C_single_pump_fault_failover,400,4,0.6,false,1.333,0.0639,0
+D_double_pump_fault,500,5,0.6,false,1.333,0.0875,0
+E_setpoint_step,400,3,0.45,false,1.333,0.0098,0
+F_staging_boundary_oscillation,600,3,0.3,false,1.333,0.0097,0

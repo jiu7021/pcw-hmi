@@ -1,0 +1,128 @@
+/* =============================================================================
+ * tests/scenarios.js — 시나리오 A~F 정의 + 게인 배치 시험용 게인 세트
+ * ========================================================================= */
+const SimCore = require('../sim-core.js');
+const { LOAD_LOW_KW, LOAD_MED_KW, LOAD_HIGH_KW } = SimCore.CONST;
+
+/* A. 정상 부하 사이클 — 내장 3단(저/중/고) 순환 부하를 손대지 않고 그대로 사용.
+ * LOAD_CYCLE_S(180s)의 3.3배 이상 돌려 여러 사이클에 걸친 정상거동을 관찰. */
+function scenarioA() {
+  return {
+    name: 'A_normal_load_cycle',
+    description: '정상 부하 사이클 (내장 저→중→고 3단 순환, 600s ≈ 3.3사이클)',
+    durationS: 600,
+    seed: 1001,
+    events: [{ atS: 0, fn: (state) => SimCore.masterStart(state) }],
+  };
+}
+
+/* B. 급격한 부하 스텝 (저→고, 고→저) — 게인 배치 시험/단일vs캐스케이드 비교에도 재사용. */
+function scenarioB(opts) {
+  opts = opts || {};
+  const stepUpAtS = 100, stepDownAtS = 300;
+  const durationS = opts.durationS ?? 500;
+  return {
+    name: opts.name || 'B_load_step',
+    description: `급격한 부하 스텝 (저${LOAD_LOW_KW}kW→고${LOAD_HIGH_KW}kW @${stepUpAtS}s, 고→저 @${stepDownAtS}s)`,
+    durationS,
+    seed: opts.seed ?? 2001,
+    setup(state) {
+      if (opts.gains) Object.assign(state.gains, opts.gains);
+      if (opts.controlStructure) state.controlStructure = opts.controlStructure;
+    },
+    events: [{ atS: 0, fn: (state) => SimCore.masterStart(state) }],
+    loadProfile(tSec) { return tSec < stepUpAtS ? LOAD_LOW_KW : (tSec < stepDownAtS ? LOAD_HIGH_KW : LOAD_LOW_KW); },
+    meta: { stepUpAtS, stepDownAtS },
+  };
+}
+
+/* C. 운전 중 펌프 1대 고장 → 자동 절체.
+ * 고부하로 고정해 다수 펌프가 빨리 필요해지도록 만든 뒤 150s 시점에 고장 주입
+ * (사전 실행 결과 고부하 고정시 t≈80~140s 사이에 통상 2~3대가 이미 가동 중이라
+ * 150s면 여유있게 다중펌프 상태에서 고장이 발생함을 확인). */
+function scenarioC() {
+  return {
+    name: 'C_single_pump_fault_failover',
+    description: '운전 중 펌프 1대 고장(@150s) → 대기 펌프 자동 절체 확인',
+    durationS: 400,
+    seed: 3001,
+    loadProfile: () => LOAD_HIGH_KW,
+    events: [
+      { atS: 0, fn: (state) => SimCore.masterStart(state) },
+      { atS: 150, fn: (state) => SimCore.faultPump(state, state.pumps[0]) },
+    ],
+    meta: { faultAtS: [150] },
+  };
+}
+
+/* D. 2대 연속 고장 (1대만 잔존) */
+function scenarioD() {
+  return {
+    name: 'D_double_pump_fault',
+    description: '2대 연속 고장(펌프1@150s, 펌프2@250s) → 1대만 잔존한 상태의 거동',
+    durationS: 500,
+    seed: 4001,
+    loadProfile: () => LOAD_HIGH_KW,
+    events: [
+      { atS: 0, fn: (state) => SimCore.masterStart(state) },
+      { atS: 150, fn: (state) => SimCore.faultPump(state, state.pumps[0]) },
+      { atS: 250, fn: (state) => SimCore.faultPump(state, state.pumps[1]) },
+    ],
+    meta: { faultAtS: [150, 250] },
+  };
+}
+
+/* E. SP 급변 — 부하는 중간값으로 고정해 SP 스텝의 영향만 분리해서 관찰. */
+function scenarioE() {
+  const spBeforeC = 21, spAfterC = 18, stepAtS = 150;
+  return {
+    name: 'E_setpoint_step',
+    description: `SP 급변 (${spBeforeC}°C → ${spAfterC}°C @${stepAtS}s, 부하는 중간값 고정)`,
+    durationS: 400,
+    seed: 5001,
+    loadProfile: () => LOAD_MED_KW,
+    events: [
+      { atS: 0, fn: (state) => SimCore.masterStart(state) },
+      { atS: stepAtS, fn: (state) => { state.spTempC = spAfterC; } },
+    ],
+    meta: { stepAtS, spBeforeC, spAfterC },
+  };
+}
+
+/* F. 부하가 대수제어 임계 근처에서 계속 진동 (헌팅 유발 적대적 시험).
+ * 이론상 가장 빠른 투입→해제 왕복 주기는 STAGE_UP_DELAY_S+STAGE_DOWN_DELAY_S=45s
+ * (tests/metrics.js 참조). 이보다 훨씬 짧은 25s 주기로 중부하/고부하를 오가며
+ * 대수제어가 이 부근에서 자주 흔들리는지(헌팅) 적대적으로 떠본다. */
+function scenarioF() {
+  const period = 25;
+  return {
+    name: 'F_staging_boundary_oscillation',
+    description: `부하를 중${LOAD_MED_KW}kW/고${LOAD_HIGH_KW}kW 사이에서 ${period}s 주기로 빠르게 진동 (헌팅 유발 시험)`,
+    durationS: 600,
+    seed: 6001,
+    events: [{ atS: 0, fn: (state) => SimCore.masterStart(state) }],
+    loadProfile(tSec) {
+      const phase = tSec % period;
+      return phase < period / 2 ? LOAD_MED_KW : LOAD_HIGH_KW;
+    },
+    meta: { period },
+  };
+}
+
+function allScenarios() {
+  return [scenarioA(), scenarioB(), scenarioC(), scenarioD(), scenarioE(), scenarioF()];
+}
+
+/* ---- 게인 배치 시험용 게인 세트 ----
+ * Default는 CONST.OUTER_KP0 등 실제 기본값과 동일. 나머지는 그 대비 -50%/+100%,
+ * 그리고 D항 추가(PID 프리셋과 동일하게 Kd=20)로 비교 대상을 넓힌 것으로,
+ * "최적으로 튜닝된 값"이 아니라 게인 크기가 오버슈트/정착시간/토글횟수에 미치는
+ * 영향을 보여주기 위한 예시 세트임을 명시한다. */
+const GAIN_SETS = [
+  { name: 'Conservative(외부Kp -50%)', gains: { oKp: 20, oKi: 2, oKd: 0, iKp: 0.15, iKi: 0.08, iKd: 0 } },
+  { name: 'Default(기본값)', gains: { oKp: 40, oKi: 4, oKd: 0, iKp: 0.3, iKi: 0.15, iKd: 0 } },
+  { name: 'Aggressive(외부Kp +100%)', gains: { oKp: 80, oKi: 8, oKd: 0, iKp: 0.6, iKi: 0.3, iKd: 0 } },
+  { name: 'PID(D항 추가, Kd=20)', gains: { oKp: 40, oKi: 4, oKd: 20, iKp: 0.3, iKi: 0.15, iKd: 0 } },
+];
+
+module.exports = { scenarioA, scenarioB, scenarioC, scenarioD, scenarioE, scenarioF, allScenarios, GAIN_SETS };
