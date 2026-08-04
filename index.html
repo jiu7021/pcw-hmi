@@ -277,13 +277,18 @@ const CONST = Object.freeze({
   MIN_FLOW_DELAY_S: 5,         // s 최소유량 미달 지속시 보호동작 발동 지연 — 순간 노이즈 오동작 방지 대표값
   MIN_FLOW_RELEASE_MARGIN: 1.1,// 해제는 기준의 110%에서 — 채터링 방지 히스테리시스
 
-  // ---------- 판형 열교환기 — Effectiveness-NTU법 (Incropera, Fundamentals of Heat
-  //            and Mass Transfer; Cmin/Cmax→0 극한에서 eps = 1 - exp(-NTU)) ----------
-  // HX_UA_DESIGN: 설계유량 600m3/h, 고부하 환수 26°C, 냉동기 7°C 조건에서
-  //   공급온도가 SP 21°C 근방이 되도록 eps≈0.26 (NTU≈0.305)로 역산한 값.
-  HX_UA_DESIGN: 213000,        // W/K
-  HX_UA_FLOW_EXPONENT: 0.8,    // UA ∝ flow^0.8 — 난류 대류열전달계수 Nu∝Re^0.8 상관식(Dittus-Boelter형) 근사
+  // ---------- 판형 열교환기 — 단순 열수지 근사 (정밀 열전달 모델링은 이 시뮬레이터의
+  //            범위가 아님. 목적은 "유량이 늘수록 공급온도가 냉동기 온도에 더 가까워진다"는
+  //            제어 관점의 정성적 관계만 재현하는 것) ----------
+  // 공급온도 목표값 = 냉동기온도 + (환수온도-냉동기온도) × HX_MIX_FLOW_M3H/(유량+HX_MIX_FLOW_M3H)
+  // 유량이 0에 가까우면 분수가 1에 가까워져 목표값이 환수온도(냉각 없음)에 근접하고,
+  // 유량이 커질수록 분수가 0에 가까워져 목표값이 냉동기온도(최대 냉각)에 근접하는,
+  // 그 사이를 유량으로 매끄럽게 잇는 가장 단순한 형태의 곡선을 사용.
+  // HX_MIX_FLOW_M3H: 설계유량 600m3/h·고부하 환수 26°C·냉동기 7°C 조건에서 공급온도가
+  //   SP 21°C 근방이 되도록 역산한 값(위 식에 21=7+(26-7)×K/(600+K)를 대입해 K≈1680 산출).
+  HX_MIX_FLOW_M3H: 1680,       // m3/h
   HX_THERMAL_TAU_S: 12,        // s 공급헤더/판형HX 유체 열용량에 의한 1차 지연 — 배관·소용적 혼합 대표값
+                                // (위 목표값에 곧바로 도달하지 않고 이 시정수로 서서히 수렴)
 
   // ---------- 공정부하 시나리오 (가상 팹 배치공정 부하 패턴, 근거 없는 임의 대표값) ----------
   LOAD_CYCLE_S: 180,           // s 저→중→고 3단 순환 주기
@@ -294,17 +299,18 @@ const CONST = Object.freeze({
   DISTURBANCE_STEP_KW: 1500,   // kW '외란 인가' 버튼으로 주는 임시 부하 스텝
   DISTURBANCE_DURATION_S: 60,  // s 외란 지속시간
 
-  // ---------- 펌프 (원심펌프, 2차곡선 근사 H=n²H0-kQ², affinity law) ----------
+  // ---------- 펌프 (병렬 유량배분은 "운전대수 × 속도"에 비례하는 단순 합산으로 근사.
+  //            펌프 개별 특성곡선·헤더압력 균형 계산은 이 시뮬레이터의 범위가 아님) ----------
   // 2대 상시 운전 + 1대 예비(N+1) 여유를 고려해 설계유량/3보다 다소 크게 개별 정격을 둠(가정치)
-  PUMP_RATED_FLOW_M3H: 250,    // m3/h 펌프 1대 정격유량 — 가정치
-  PUMP_RATED_HEAD_M: 32,       // m 펌프 1대 정격양정 — 가정치
-  PUMP_SHUTOFF_HEAD_M: 40,     // m 무유량시 양정(체절양정) — 원심펌프 통상 정격양정의 1.2~1.3배 근사
+  PUMP_RATED_FLOW_M3H: 250,    // m3/h 펌프 1대가 속도 100%일 때 내는 유량 — 가정치
+                                // (실제 유량 = 이 값 × 가동중인 각 펌프 속도(%)/100 의 합)
   PUMP_MIN_SPEED_PCT: 20,      // % VFD 최소운전속도 — 저속영역 원심펌프 불안정 방지 통념(대표값)
   PUMP_RAMP_RATE_PCT_S: 15,    // %/s VFD 가감속률 — 일반 산업용 VFD 가감속시간(수초대) 대표값
   PUMP_START_TON_S: 3,         // s 기동 인터록 지연(TON) — 모터 기동 돌입전류 안정화 대표시간
 
-  // 배관+공정부하+HX 합산 시스템저항계수 R(H=R·Q², H:m, Q:m3/h)
-  // 설계유량 600m3/h에서 정격양정 32m와 균형되도록 역산: R = 32/600²
+  // 배관+공정부하+HX를 합쳐 계통 전체의 유량-차압 특성을 단순 2차 관계(ΔP∝Q², 난류영역
+  // 통상 근사)로만 표시용으로 대표. 실제 펌프 양정과 균형을 맞추는 계산은 하지 않음(단순화).
+  // 설계유량 600m3/h에서 차압이 대표값 약 313kPa(수주 32m 상당)이 되도록 잡은 가정 계수.
   SYSTEM_RESISTANCE_R: 32 / (600 * 600),
 
   // ---------- 버퍼탱크 ----------
@@ -341,9 +347,6 @@ const CONST = Object.freeze({
   ALM_LEVEL_H_PCT: 85, ALM_LEVEL_HH_PCT: 92,
   ALM_LEVEL_L_PCT: 25, ALM_LEVEL_LL_PCT: 15, ALM_LEVEL_HYS_PCT: 2,
 });
-
-// 펌프 2차곡선 계수 k: H0 - k*Qrated² = Hrated
-const PUMP_CURVE_K = (CONST.PUMP_SHUTOFF_HEAD_M - CONST.PUMP_RATED_HEAD_M) / (CONST.PUMP_RATED_FLOW_M3H ** 2);
 
 /* ---------------------------- 유틸리티 ---------------------------- */
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -433,14 +436,14 @@ function stepPID(s, error, dt, kp, ki, kd, outMin, outMax) {
   return output;
 }
 
-/* ---------------------------- 플랜트 물리모델 ---------------------------- */
+/* ---------------------------- 플랜트 물리모델 (제어 로직 검증용 단순 근사 —
+ * 정밀 열전달/유체 모델링은 이 프로젝트의 범위가 아니다) ---------------------------- */
 function hxOutletTempC(flowM3h, primaryTempC, returnTempC) {
-  const q = Math.max(flowM3h, 1);
-  const flowKgS = q * CONST.WATER_RHO / 3600;
-  const ua = CONST.HX_UA_DESIGN * Math.pow(q / CONST.DESIGN_FLOW_M3H, CONST.HX_UA_FLOW_EXPONENT);
-  const ntu = ua / (flowKgS * CONST.WATER_CP);
-  const eps = 1 - Math.exp(-ntu);
-  return primaryTempC + (1 - eps) * (returnTempC - primaryTempC);
+  // 단순 열수지: 유량이 많을수록 공급온도가 냉동기온도에 가까워지고,
+  // 유량이 적을수록(0에 가까울수록) 냉각이 거의 안 되어 환수온도에 가까워진다.
+  // CONST.HX_MIX_FLOW_M3H 근거는 CONST 선언부 주석 참조.
+  const frac = CONST.HX_MIX_FLOW_M3H / (Math.max(flowM3h, 0) + CONST.HX_MIX_FLOW_M3H);
+  return primaryTempC + frac * (returnTempC - primaryTempC);
 }
 function processDeltaTC(flowM3h, loadKW) {
   const flowKgS = Math.max(flowM3h, 1) * CONST.WATER_RHO / 3600;
@@ -456,31 +459,14 @@ function processLoadKW(tSec) {
   return Math.max(0, base + extra + gaussianRandom() * CONST.LOAD_NOISE_STD_KW);
 }
 
-// 헤더 압력을 이분법으로 해석: 각 가동 펌프 유량의 합 = 시스템저항곡선을 만족하는 헤더양정 H
-function solveHeaderHead(pumps) {
-  const running = pumps.filter(p => p.status === 'RUNNING');
-  if (running.length === 0) return { head: 0, flows: pumps.map(() => 0), total: 0 };
-  const flowAt = (H) => running.reduce((sum, p) => {
-    const nFrac = p.speedPct / 100;
-    const under = nFrac * nFrac * CONST.PUMP_SHUTOFF_HEAD_M - H;
-    return sum + (under > 0 ? Math.sqrt(under / PUMP_CURVE_K) : 0);
+// 병렬 펌프 유량배분: 펌프별 특성곡선/헤더압력 균형 계산 없이,
+// "운전 중인 각 펌프가 자기 속도(%)에 비례한 유량을 내고, 그걸 그냥 다 더한다"는
+// 가장 단순한 근사. (펌프간 상호작용·헤더압력 공유는 반영하지 않음)
+function sumPumpFlows(pumps) {
+  return pumps.reduce((sum, p) => {
+    if (p.status !== 'RUNNING') return sum;
+    return sum + (p.speedPct / 100) * CONST.PUMP_RATED_FLOW_M3H;
   }, 0);
-  let lo = 0, hi = Math.max(...running.map(p => (p.speedPct / 100) ** 2 * CONST.PUMP_SHUTOFF_HEAD_M));
-  for (let i = 0; i < 30; i++) {
-    const mid = (lo + hi) / 2;
-    const qtot = flowAt(mid);
-    const hsys = CONST.SYSTEM_RESISTANCE_R * qtot * qtot;
-    if (hsys > mid) lo = mid; else hi = mid;
-  }
-  const H = (lo + hi) / 2;
-  const total = flowAt(H);
-  const flows = pumps.map(p => {
-    if (p.status !== 'RUNNING') return 0;
-    const nFrac = p.speedPct / 100;
-    const under = nFrac * nFrac * CONST.PUMP_SHUTOFF_HEAD_M - H;
-    return under > 0 ? Math.sqrt(under / PUMP_CURVE_K) : 0;
-  });
-  return { head: H, flows, total };
 }
 
 /* ---------------------------- 펌프 기동/정지/고장 ---------------------------- */
@@ -624,10 +610,9 @@ function tick() {
     else if (p.speedPct > target) p.speedPct = Math.max(target, p.speedPct - rampStep);
   });
 
-  // --- 유압/유량 해석 ---
-  const hres = solveHeaderHead(state.pumps);
-  state.flowTotalM3h = hres.total;
-  state.dpKPa = CONST.SYSTEM_RESISTANCE_R * hres.total * hres.total * CONST.KPA_PER_M_HEAD;
+  // --- 유량/차압 (단순 합산 근사) ---
+  state.flowTotalM3h = sumPumpFlows(state.pumps);
+  state.dpKPa = CONST.SYSTEM_RESISTANCE_R * state.flowTotalM3h * state.flowTotalM3h * CONST.KPA_PER_M_HEAD;
 
   // --- 열역학 ---
   state.chillerTempC += ((state.chillerRunning ? CONST.CHILLER_SP_C : CONST.AMBIENT_C) - state.chillerTempC) / CONST.CHILLER_TAU_S * dtInner;

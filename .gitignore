@@ -1,0 +1,12 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Local env / secrets (this project has none, kept as a safety default)
+.env
+.env.local
