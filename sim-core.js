@@ -60,6 +60,10 @@
     PUMP_MIN_SPEED_PCT: 20,      // % VFD 최소운전속도 — 저속영역 원심펌프 불안정 방지 통념(대표값)
     PUMP_RAMP_RATE_PCT_S: 15,    // %/s VFD 가감속률 — 일반 산업용 VFD 가감속시간(수초대) 대표값
     PUMP_START_TON_S: 3,         // s 기동 인터록 지연(TON) — 모터 기동 돌입전류 안정화 대표시간
+    // 바이패스(VFD 고장 시 상용전원 직입, DOL) 급전 시에는 속도 제어 자체가
+    // 없다 — 컨택터가 붙으면 사실상 정격속도로 고정 운전된다는 뜻으로 100%를
+    // 대표값으로 둔다(sim-electrical.js의 급전모드 설명 참조).
+    BYPASS_FIXED_SPEED_PCT: 100,
 
     // 배관+공정부하+HX를 합쳐 계통 전체의 유량-차압 특성을 단순 2차 관계(ΔP∝Q², 난류영역
     // 통상 근사)로만 표시용으로 대표. 설계유량 600m3/h에서 차압이 대표값 약 313kPa(수주 32m
@@ -95,8 +99,13 @@
     ALM_TEMP_H_C: 23, ALM_TEMP_HH_C: 25, ALM_TEMP_HYS_C: 0.5,
     // dp(Q)=SYSTEM_RESISTANCE_R·Q²·KPA_PER_M_HEAD 식으로 유량기준 알람(MIN_FLOW_M3H=60m3/h,
     // dp≈3kPa)과 정합되도록 환산 — 정상 1대 저속운전 영역(Q≈150~250m3/h, dp≈20~55kPa)에서는
-    // 발생하지 않고 실제 최소유량 부근에서만 동작하도록 계산해 설정
-    ALM_DP_L_KPA: 7, ALM_DP_LL_KPA: 3, ALM_DP_HYS_KPA: 1,
+    // 발생하지 않고 실제 최소유량 부근에서만 동작하도록 계산해 설정.
+    // ALM_DP_HYS_KPA=2: 펌프 기동 램프 구간에서는 유량이 매 틱 수 m3/h씩 바뀌고
+    // dp∝flow²이라 경계값 부근에서 틱당 dp 변화가 1kPa 안팎이 될 수 있다 — 애초
+    // 1kPa로 뒀더니 자동 검증 스위트(다중 시드 스트레스 테스트)에서 램프 도중
+    // 경계를 잠깐 넘었다가 한 틱만에 되돌아오는 채터링이 실제로 잡혀서, 그
+    // 틱당 변화폭의 2배 이상 여유를 두도록 2kPa로 넓혔다(README 검증 결과 참조).
+    ALM_DP_L_KPA: 7, ALM_DP_LL_KPA: 3, ALM_DP_HYS_KPA: 2,
     ALM_LEVEL_H_PCT: 85, ALM_LEVEL_HH_PCT: 92,
     ALM_LEVEL_L_PCT: 25, ALM_LEVEL_LL_PCT: 15, ALM_LEVEL_HYS_PCT: 2,
   });
@@ -174,6 +183,7 @@
 
       pumps: [1, 2, 3].map(id => ({
         id, status: 'STOPPED', speedPct: 0, fault: false, runtimeH: 0, startTimer: 0, startCount: 0,
+        feedMode: 'VFD', // 'VFD' | 'BYPASS' — setPumpFeedMode()로만 바꾼다
       })),
 
       alarmStates: {}, // tag -> {active, acked, priority, desc, raisedAt}
@@ -253,8 +263,16 @@
       .filter(p => p.status === 'STANDBY' && !p.fault)
       .sort((a, b) => a.runtimeH - b.runtimeH)[0];
   }
+  // 동시 기동 금지(anyPumpStarting 잠금): VFD 정상 기동은 소프트스타트라 돌입이
+  // 사실상 없어(정격의 110~150%) 겹쳐도 문제가 되지 않는다. 이 잠금이 실제로
+  // 막아야 하는 위험한 상황은 "바이패스(VFD 고장 시 상용전원 직입, DOL) 기동이
+  // 두 대 이상 겹치는 경우"다 — DOL 돌입전류(정격의 5~7배)가 중첩되면 모선
+  // 전압이 관리한계 아래로 떨어진다(sim-electrical.js CONST 주석, README
+  // "검증 결과"의 인터록 우회 데모 참조). 그래서 이 잠금은 급전모드와 무관하게
+  // 항상 걸어둔다 — 바이패스 상황을 특정해서 조건부로 풀면, 그 판단 로직 자체가
+  // 또 다른 실수 지점이 되기 때문에(방어적으로) 모든 기동에 일괄 적용한다.
   function startPump(state, p) {
-    if (!p || state.anyPumpStarting) return false; // 동시 기동 금지
+    if (!p || state.anyPumpStarting) return false;
     p.status = 'STARTING';
     p.startTimer = 0;
     p.startCount = (p.startCount || 0) + 1;
@@ -281,6 +299,16 @@
   function clearFaultUI(state, p) {
     p.fault = false;
     p.status = state.masterOn ? 'STANDBY' : 'STOPPED';
+  }
+  // VFD 고장 → 바이패스(DOL) 절체, 또는 복구 → VFD로 되돌림.
+  // 바이패스 중에는 속도 지령(speedCmdPct)을 받지 않고 BYPASS_FIXED_SPEED_PCT로
+  // 고정 운전한다(tick()의 펌프 속도 램프 구간 참조) — 별도의 "나머지 펌프로
+  // 제어" 특수 로직을 두지 않아도, 내부루프가 "설정유량 - 전체유량(바이패스
+  // 펌프의 고정 기여분 포함)" 오차를 그대로 보고 나머지 VFD 펌프 속도를
+  // 조정하므로 기존 폐루프 구조가 자연스럽게 그 역할을 한다.
+  function setPumpFeedMode(state, pumpId, mode) {
+    const p = state.pumps.find(pp => pp.id === pumpId);
+    if (p) p.feedMode = mode;
   }
 
   /* ---------------------------- 마스터 START/STOP, 모드전환, 외란 ---------------------------- */
@@ -323,21 +351,29 @@
     return { min: state.hxProtectionActive ? 30 : 0, max: 100 };
   }
 
-  function outerLoopStep(state, dtS) {
-    const error = state.supplyTempC - state.spTempC; // 온도가 높으면 유량을 늘려야 함
+  // measuredSupplyTempC/measuredFlowM3h: 센서 계층(sim-sensors.js)이 있을 때
+  // 오케스트레이터(sim-plant.js)가 넘겨주는 "측정값". 생략하면(undefined)
+  // 기존과 완전히 동일하게 state.*(참값)를 직접 쓴다 — 센서 계층이 없는 기존
+  // 호출부(브라우저의 이전 동작, tests/의 기존 6종 검증)는 이 변경으로
+  // 동작이 전혀 바뀌지 않는다.
+  function outerLoopStep(state, dtS, measuredSupplyTempC) {
+    const supplyTempC = measuredSupplyTempC ?? state.supplyTempC;
+    const error = supplyTempC - state.spTempC; // 온도가 높으면 유량을 늘려야 함
     const out = stepPID(state.outerPid, error, dtS, state.gains.oKp, state.gains.oKi, state.gains.oKd,
       0, CONST.DESIGN_FLOW_M3H * 1.1);
     const b = outerFlowSpBounds(state);
     state.flowSpM3h = clamp(out, b.min, b.max);
   }
-  function innerLoopStep(state, dtS) {
-    const error = state.flowSpM3h - state.flowTotalM3h;
+  function innerLoopStep(state, dtS, measuredFlowM3h) {
+    const flowM3h = measuredFlowM3h ?? state.flowTotalM3h;
+    const error = state.flowSpM3h - flowM3h;
     const b = innerSpeedBounds(state);
     state.speedCmdPct = stepPID(state.innerPid, error, dtS, state.gains.iKp, state.gains.iKi, state.gains.iKd, b.min, b.max);
   }
-  function singleLoopStep(state, dtS) {
+  function singleLoopStep(state, dtS, measuredSupplyTempC) {
     // 단일루프: 온도 오차로 펌프속도를 직접 산출 (캐스케이드 없이)
-    const error = state.supplyTempC - state.spTempC;
+    const supplyTempC = measuredSupplyTempC ?? state.supplyTempC;
+    const error = supplyTempC - state.spTempC;
     state.speedCmdPct = stepPID(state.innerPid, error, dtS, state.gains.oKp / 4, state.gains.oKi / 4, state.gains.oKd / 4, 0, 100);
   }
 
@@ -359,12 +395,13 @@
     }
   }
 
-  function interlocksStep(state, dtS) {
+  function interlocksStep(state, dtS, measuredFlowM3h) {
+    const flowM3h = measuredFlowM3h ?? state.flowTotalM3h;
     // 1) 최소유량 인터록 (열교환기 보호)
-    if (state.masterOn && state.flowTotalM3h < CONST.MIN_FLOW_M3H) state.minFlowTimer += dtS;
-    else if (state.flowTotalM3h >= CONST.MIN_FLOW_M3H * CONST.MIN_FLOW_RELEASE_MARGIN) state.minFlowTimer = 0;
+    if (state.masterOn && flowM3h < CONST.MIN_FLOW_M3H) state.minFlowTimer += dtS;
+    else if (flowM3h >= CONST.MIN_FLOW_M3H * CONST.MIN_FLOW_RELEASE_MARGIN) state.minFlowTimer = 0;
     if (state.minFlowTimer >= CONST.MIN_FLOW_DELAY_S) state.hxProtectionActive = true;
-    else if (state.flowTotalM3h >= CONST.MIN_FLOW_M3H * CONST.MIN_FLOW_RELEASE_MARGIN) state.hxProtectionActive = false;
+    else if (flowM3h >= CONST.MIN_FLOW_M3H * CONST.MIN_FLOW_RELEASE_MARGIN) state.hxProtectionActive = false;
 
     // 2) 냉동기 단독운전 금지: 가동중인 펌프가 1대도 없으면 냉동기 정지
     const runningCount = state.pumps.filter(p => p.status === 'RUNNING').length;
@@ -428,18 +465,31 @@
     });
   }
 
+  // HH/H, LL/L처럼 인접한 2단 임계값을 갖는 알람은 반드시 (1) 각 단계 스스로도
+  // 히스테리시스로 해소되고, (2) 상위(더 심각한) 단계의 "해소 여부"로 하위 단계를
+  // 배타적으로 걸러야 한다. 처음엔 상위단계(HH/LL)에 히스테리시스가 없고 하위단계가
+  // 원시 임계값(예: P > ALM_DP_LL_KPA)으로만 상위단계를 배제했는데, 값이 그 경계
+  // 바로 위/아래에서 흔들리면 상위단계 자체가 매 틱 켜졌다 꺼졌다 하면서 하위단계도
+  // 덩달아 채터링했다 — 자동 검증 스위트(다중 시드 스트레스 테스트)가 펌프 기동
+  // 램프 중 실제로 이 상태를 잡아냈다(README 검증 결과 참조). 그래서 상위단계에도
+  // 자기 히스테리시스를 주고, 하위단계는 "히스테리시스가 적용된 상위단계 활성상태"로
+  // 배제하도록 통일했다.
   function evaluateAlarms(state) {
-    const T = state.supplyTempC, H = CONST.ALM_TEMP_HYS_C;
-    setAlarmActive(state, 'TEMP_HH', T >= CONST.ALM_TEMP_HH_C, 'Critical', `공급온도 HH (${fmt(T,1)}°C ≥ ${CONST.ALM_TEMP_HH_C}°C)`);
-    setAlarmActive(state, 'TEMP_H', T >= CONST.ALM_TEMP_H_C - (state.alarmStates.TEMP_H?.active ? H : 0) && T < CONST.ALM_TEMP_HH_C, 'High', `공급온도 H (${fmt(T,1)}°C ≥ ${CONST.ALM_TEMP_H_C}°C)`);
+    const T = state.supplyTempC, Ht = CONST.ALM_TEMP_HYS_C;
+    const hhActive = T >= CONST.ALM_TEMP_HH_C - (state.alarmStates.TEMP_HH?.active ? Ht : 0);
+    setAlarmActive(state, 'TEMP_HH', hhActive, 'Critical', `공급온도 HH (${fmt(T,1)}°C ≥ ${CONST.ALM_TEMP_HH_C}°C)`);
+    const hActive = !hhActive && T >= CONST.ALM_TEMP_H_C - (state.alarmStates.TEMP_H?.active ? Ht : 0);
+    setAlarmActive(state, 'TEMP_H', hActive, 'High', `공급온도 H (${fmt(T,1)}°C ≥ ${CONST.ALM_TEMP_H_C}°C)`);
 
     const P = state.dpKPa, Hd = CONST.ALM_DP_HYS_KPA;
-    setAlarmActive(state, 'DP_LL', state.masterOn && P <= CONST.ALM_DP_LL_KPA, 'Critical', `차압 LL (${fmt(P,0)}kPa ≤ ${CONST.ALM_DP_LL_KPA}kPa)`);
-    setAlarmActive(state, 'DP_L', state.masterOn && P <= CONST.ALM_DP_L_KPA + (state.alarmStates.DP_L?.active ? Hd : 0) && P > CONST.ALM_DP_LL_KPA, 'Medium', `차압 L (${fmt(P,0)}kPa ≤ ${CONST.ALM_DP_L_KPA}kPa)`);
+    const llActive = state.masterOn && P <= CONST.ALM_DP_LL_KPA + (state.alarmStates.DP_LL?.active ? Hd : 0);
+    setAlarmActive(state, 'DP_LL', llActive, 'Critical', `차압 LL (${fmt(P,0)}kPa ≤ ${CONST.ALM_DP_LL_KPA}kPa)`);
+    const lActive = !llActive && state.masterOn && P <= CONST.ALM_DP_L_KPA + (state.alarmStates.DP_L?.active ? Hd : 0);
+    setAlarmActive(state, 'DP_L', lActive, 'Medium', `차압 L (${fmt(P,0)}kPa ≤ ${CONST.ALM_DP_L_KPA}kPa)`);
 
-    const L = state.tankLevelPct;
-    setAlarmActive(state, 'LVL_HH', L >= CONST.ALM_LEVEL_HH_PCT, 'Medium', `수위 HH (${fmt(L,0)}% ≥ ${CONST.ALM_LEVEL_HH_PCT}%)`);
-    setAlarmActive(state, 'LVL_LL', L <= CONST.ALM_LEVEL_LL_PCT, 'Critical', `수위 LL (${fmt(L,0)}% ≤ ${CONST.ALM_LEVEL_LL_PCT}%)`);
+    const L = state.tankLevelPct, Hl = CONST.ALM_LEVEL_HYS_PCT;
+    setAlarmActive(state, 'LVL_HH', L >= CONST.ALM_LEVEL_HH_PCT - (state.alarmStates.LVL_HH?.active ? Hl : 0), 'Medium', `수위 HH (${fmt(L,0)}% ≥ ${CONST.ALM_LEVEL_HH_PCT}%)`);
+    setAlarmActive(state, 'LVL_LL', L <= CONST.ALM_LEVEL_LL_PCT + (state.alarmStates.LVL_LL?.active ? Hl : 0), 'Critical', `수위 LL (${fmt(L,0)}% ≤ ${CONST.ALM_LEVEL_LL_PCT}%)`);
 
     state.pumps.forEach(p => {
       setAlarmActive(state, `PUMP${p.id}_FAULT`, p.fault, 'Critical', `펌프 ${p.id} 고장`);
@@ -454,7 +504,9 @@
   // loadKWOverride: 테스트 시나리오가 내장 3단 순환 부하 대신 원하는 부하 프로파일
   //   (예: 급격한 단일 스텝)을 직접 주입하기 위한 훅. 브라우저는 절대 넘기지 않으므로
   //   실제 화면 동작에는 아무 영향이 없다.
-  function tick(state, shadow, rng, loadKWOverride) {
+  // measured: 센서 계층이 있을 때 오케스트레이터가 넘기는 선택적 측정값
+  // 객체 {supplyTempC, flowM3h}. 생략하면 기존과 완전히 동일하게 동작한다.
+  function tick(state, shadow, rng, loadKWOverride, measured) {
     const dtInner = CONST.INNER_PERIOD_MS / 1000;
     state.simTimeS += dtInner;
     state.tickCount++;
@@ -484,14 +536,14 @@
       if (state.masterOn && p.status === 'STOPPED') p.status = 'STANDBY';
     });
 
-    // --- 제어 로직 실행 ---
-    interlocksStep(state, dtInner);
+    // --- 제어 로직 실행 (센서 계층이 있으면 측정값을, 없으면 참값을 사용) ---
+    interlocksStep(state, dtInner, measured?.flowM3h);
     if (state.masterOn && state.mode === 'AUTO') {
       if (state.controlStructure === 'CASCADE') {
-        if (state.tickCount % (CONST.OUTER_PERIOD_MS / CONST.INNER_PERIOD_MS) === 0) outerLoopStep(state, CONST.OUTER_PERIOD_MS / 1000);
-        innerLoopStep(state, dtInner);
+        if (state.tickCount % (CONST.OUTER_PERIOD_MS / CONST.INNER_PERIOD_MS) === 0) outerLoopStep(state, CONST.OUTER_PERIOD_MS / 1000, measured?.supplyTempC);
+        innerLoopStep(state, dtInner, measured?.flowM3h);
       } else {
-        singleLoopStep(state, dtInner);
+        singleLoopStep(state, dtInner, measured?.supplyTempC);
       }
       stagingStep(state, dtInner);
     } else if (state.masterOn && state.mode === 'MANUAL') {
@@ -501,10 +553,15 @@
     }
 
     // --- 펌프 속도 램프 (VFD 가감속률 제한) ---
+    // 바이패스(DOL) 급전 중인 펌프는 속도 지령을 받지 않고 고정속도로
+    // 수렴한다(setPumpFeedMode() 주석 참조) — 그 외에는 기존과 동일하게 램프.
     const rampStep = CONST.PUMP_RAMP_RATE_PCT_S * dtInner;
     state.pumps.forEach(p => {
       if (p.fault) return;
-      const target = p.status === 'RUNNING' ? clamp(state.speedCmdPct, CONST.PUMP_MIN_SPEED_PCT, 100) : 0;
+      let target;
+      if (p.status !== 'RUNNING') target = 0;
+      else if (p.feedMode === 'BYPASS') target = CONST.BYPASS_FIXED_SPEED_PCT;
+      else target = clamp(state.speedCmdPct, CONST.PUMP_MIN_SPEED_PCT, 100);
       if (p.speedPct < target) p.speedPct = Math.min(target, p.speedPct + rampStep);
       else if (p.speedPct > target) p.speedPct = Math.max(target, p.speedPct - rampStep);
     });
@@ -553,7 +610,7 @@
     createInitialState, createShadowState,
     stepPID,
     hxOutletTempC, processDeltaTC, processLoadKW, sumPumpFlows,
-    eligibleStandby, startPump, stopPump, faultPump, clearFaultUI,
+    eligibleStandby, startPump, stopPump, faultPump, clearFaultUI, setPumpFeedMode,
     masterStart, masterStop, setControlMode, applyDisturbance,
     outerFlowSpBounds, innerSpeedBounds,
     outerLoopStep, innerLoopStep, singleLoopStep, stagingStep, interlocksStep,

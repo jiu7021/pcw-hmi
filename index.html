@@ -6,6 +6,10 @@
 <title>PCW HMI 시뮬레이터 — 공정냉각수 시스템</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="sim-core.js"></script>
+<script src="sim-electrical.js"></script>
+<script src="sim-power-quality.js"></script>
+<script src="sim-sensors.js"></script>
+<script src="sim-plant.js"></script>
 <style>
 :root{
   --bg:#0a0e13;
@@ -167,6 +171,48 @@ table.alarms button{padding:2px 8px;font-size:10px;}
         </table>
         </div>
       </div>
+
+      <div class="panel">
+        <h2>전기 계통 (전동기·모선)</h2>
+        <div class="measrow">
+          <div class="item"><span class="k">모선전압</span><span class="v mono" id="elecBusV">-</span></div>
+          <div class="item"><span class="k">총전류</span><span class="v mono" id="elecTotalI">-</span></div>
+        </div>
+        <table class="runtime-table">
+          <thead><tr><th>펌프</th><th>급전모드</th><th>전류(%FLA)</th><th>열보호</th><th>결상</th></tr></thead>
+          <tbody id="elecPumpBody"></tbody>
+        </table>
+        <div class="row" style="margin-top:8px">
+          <button id="btnVfdFault1">P-1 VFD 고장(바이패스 절체)</button>
+          <button id="btnPhaseLoss1">P-1 결상 주입</button>
+          <button id="btnMechOverload1">P-1 기계적 과부하 주입</button>
+        </div>
+        <div class="compare-note">VFD 정상 기동은 소프트스타트라 돌입전류가 거의 없다(정격의 110~150%) — 여러 대가
+          겹쳐도 문제가 없다. "동시 기동 금지" 인터록이 실제로 막는 위험한 상황은 <b>VFD 고장 시 상용전원
+          직입(바이패스, DOL) 기동이 두 대 이상 겹치는 경우</b>다 — DOL 돌입전류(정격의 5~7배)가 중첩되면
+          모선전압이 관리한계 아래로 떨어진다(아래 sag 로그, README "검증 결과"의 인터록 우회 데모 참조).
+          <code>anyPumpStarting</code> 잠금은 급전모드와 무관하게 항상 걸려 있다(sim-core.js startPump() 참조).</div>
+      </div>
+
+      <div class="panel">
+        <h2>전력품질 (Sag 감시)</h2>
+        <div class="chart-wrap" style="height:140px"><canvas id="pqChart"></canvas></div>
+        <div class="measrow">
+          <div class="item"><span class="k">ESS/PCS 대응</span><span class="v mono" id="essStatus">-</span></div>
+        </div>
+        <div class="alarm-scroll" style="max-height:150px">
+        <table class="alarms">
+          <thead><tr><th>발생</th><th>잔여전압</th><th>지속시간</th><th>원인</th></tr></thead>
+          <tbody id="sagLogBody"></tbody>
+        </table>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="btnGridSagInject">외부 계통 sag 주입(15%, 3s)</button>
+        </div>
+        <div class="compare-note">sag 판정: IEEE1159 기준 0.9pu 미만이 20ms 이상 지속되면 확정. AVR(탭체인저 등)은 응답이
+          수백ms~수초로 느려 sag 대응에는 쓰지 않고, ms급으로 반응하는 ESS/PCS 무효전력 주입만 사용한다
+          (sim-power-quality.js 상단 주석 참조).</div>
+      </div>
     </div>
 
     <!-- RIGHT COLUMN -->
@@ -246,6 +292,30 @@ table.alarms button{padding:2px 8px;font-size:10px;}
           <div class="item"><span class="k">총 유량</span><span class="v mono" id="rtFlow">-</span></div>
         </div>
       </div>
+
+      <div class="panel">
+        <h2>센서 (참값 vs 측정값)</h2>
+        <div class="measrow">
+          <div class="item"><span class="k">공급온도 참값</span><span class="v mono" id="sensTrueTemp">-</span></div>
+          <div class="item"><span class="k">측정값</span><span class="v mono" id="sensMeasTemp">-</span></div>
+        </div>
+        <div class="measrow">
+          <div class="item"><span class="k">유량 참값</span><span class="v mono" id="sensTrueFlow">-</span></div>
+          <div class="item"><span class="k">측정값</span><span class="v mono" id="sensMeasFlow">-</span></div>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <label>온도센서 열화</label>
+          <input type="range" id="sensorDegradeSlider" min="0" max="100" value="0">
+          <span class="mono" id="sensorDegradeVal">0%</span>
+        </div>
+        <div class="row">
+          <button id="btnSensorStuck">공급온도 센서 고착 주입</button>
+          <button id="btnFlowRangeStuck">유량센서 상한 고착</button>
+        </div>
+        <div class="compare-note">열화(오프셋 드리프트)는 값이 서서히 어긋날 뿐이라 범위이탈·값고착·정합성 모순
+          중 어떤 진단으로도 검출되지 않는다 — 진단이 전부 "정상"이어도 참값과 측정값이 실제로는 벌어져 있을
+          수 있음을 보여주는 의도된 예시(sim-sensors.js 상단 주석 참조).</div>
+      </div>
     </div>
   </div>
 </div>
@@ -255,18 +325,24 @@ table.alarms button{padding:2px 8px;font-size:10px;}
  * PCW HMI 시뮬레이터 — 브라우저 UI 레이어
  *
  * 제어 로직 + 플랜트 물리모델은 sim-core.js(DOM 비의존, 순수 계산 모듈)에
- * 있다. 이 스크립트는 그 모듈을 불러와 상태를 만들고, 매 틱마다
- * SimCore.tick()을 호출한 뒤 그 결과를 화면(SVG/Chart.js/DOM)에 반영하는
- * 역할만 한다. tests/ 아래 헤드리스 러너는 이 렌더링 레이어 없이
- * sim-core.js만 require해서 같은 시뮬레이션을 돌린다.
+ * 있고, 전기/전력품질/센서 계층은 sim-electrical.js/sim-power-quality.js/
+ * sim-sensors.js에 각각 있으며 sim-plant.js가 이들을 한 틱
+ * 안에서 순서대로 엮는다(오케스트레이터). 이 스크립트는 SimPlant.tick()을
+ * 호출한 뒤 그 결과를 화면(SVG/Chart.js/DOM)에 반영하는 역할만 한다.
+ * tests/ 아래 헤드리스 러너는 이 렌더링 레이어 없이 같은 모듈들을 require해서
+ * 동일한 시뮬레이션을 돌린다.
  * ========================================================================= */
 const { CONST, clamp, fmt } = SimCore;
 
-let state = SimCore.createInitialState();
-let shadow = SimCore.createShadowState();
+const plant = SimPlant.createPlant();
+let state = plant.core;      // 기존 렌더링 코드가 state.*를 그대로 쓸 수 있도록 별칭 유지
+let shadow = plant.shadow;
 
 // 트렌드 차트용 표시 데이터 — 시뮬레이션 상태(state)가 아니라 UI 전용 버퍼.
-const uiTrend = { t: [], sp: [], supply: [], flow: [], p1: [], p2: [], p3: [], shadowCascade: [], shadowSingle: [] };
+const uiTrend = { t: [], sp: [], supply: [], measTemp: [], flow: [], p1: [], p2: [], p3: [], shadowCascade: [], shadowSingle: [] };
+// 전력품질 고속 트렌드용 버퍼(5ms 해상도 그대로 유지, 표시 구간만 제한)
+const pqTrend = { t: [], v: [] };
+const PQ_TREND_WINDOW_S = 6; // 최근 6초 분량만 유지
 
 /* ---------------------------- 렌더링 ---------------------------- */
 function setText(el, text) {
@@ -415,6 +491,7 @@ function initChart() {
         { label: 'P3속도(%)', data: [], borderColor: '#c17fff', yAxisID: 'y2', pointRadius: 0, borderWidth: 1 },
         { label: '캐스케이드(비교,°C)', data: [], borderColor: '#8899aa', yAxisID: 'y', pointRadius: 0, borderWidth: 1, borderDash: [2, 2], hidden: true },
         { label: '단일루프(비교,°C)', data: [], borderColor: '#556677', yAxisID: 'y', pointRadius: 0, borderWidth: 1, borderDash: [6, 3], hidden: true },
+        { label: '측정 공급온도(°C)', data: [], borderColor: '#ff5d8f', yAxisID: 'y', pointRadius: 0, borderWidth: 1.5, borderDash: [3, 2] },
       ],
     },
     options: {
@@ -435,6 +512,7 @@ function sampleTrend() {
   tr.t.push(state.simTimeS.toFixed(0));
   tr.sp.push(state.spTempC);
   tr.supply.push(state.supplyTempC);
+  tr.measTemp.push(plant.sensors.supplyTemp.measuredValue);
   tr.flow.push(state.flowTotalM3h);
   tr.p1.push(state.pumps[0].speedPct);
   tr.p2.push(state.pumps[1].speedPct);
@@ -453,7 +531,37 @@ function sampleTrend() {
   chart.data.datasets[5].data = tr.p3;
   chart.data.datasets[6].data = tr.shadowCascade;
   chart.data.datasets[7].data = tr.shadowSingle;
+  chart.data.datasets[8].data = tr.measTemp;
   chart.update('none');
+}
+
+/* ---- 전력품질 고속 트렌드 차트 ---- */
+let pqChart;
+function initPQChart() {
+  const ctx = document.getElementById('pqChart').getContext('2d');
+  pqChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [
+      { label: '모선전압(%)', data: [], borderColor: '#3ea6ff', pointRadius: 0, borderWidth: 1.5 },
+    ] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      scales: {
+        x: { ticks: { color: '#748094', maxTicksLimit: 6 }, grid: { color: '#1c2532' } },
+        y: { min: 70, max: 105, ticks: { color: '#748094' }, grid: { color: '#1c2532' } },
+      },
+      plugins: { legend: { display: false } },
+    },
+  });
+}
+function samplePQTrend(pqSubsteps) {
+  if (!pqSubsteps) return;
+  pqSubsteps.forEach(s => { pqTrend.t.push(s.tOffsetS); pqTrend.v.push(s.effectiveVoltagePu * 100); });
+  const cutoff = state.simTimeS - PQ_TREND_WINDOW_S;
+  while (pqTrend.t.length && pqTrend.t[0] < cutoff) { pqTrend.t.shift(); pqTrend.v.shift(); }
+  pqChart.data.labels = pqTrend.t.map(t => t.toFixed(2));
+  pqChart.data.datasets[0].data = pqTrend.v;
+  pqChart.update('none');
 }
 
 /* ---- 패널 렌더 ---- */
@@ -513,21 +621,60 @@ function renderFaultPanel() {
     sw.addEventListener('click', () => {
       const id = Number(sw.dataset.faultId);
       const p = state.pumps.find(pp => pp.id === id);
-      if (p.fault) SimCore.clearFaultUI(state, p); else SimCore.faultPump(state, p);
+      if (p.fault) SimPlant.clearPumpFault(plant, id); else SimCore.faultPump(state, p);
       renderFaultPanel();
     });
   });
 }
 
+/* ---- 전기/전력품질/센서 패널 렌더 ---- */
+function renderElectrical() {
+  setText(document.getElementById('elecBusV'), fmt(plant.elec.busVoltagePu * 100, 1) + '%');
+  setText(document.getElementById('elecTotalI'), fmt(plant.elec.totalCurrentPu, 2) + ' pu');
+  const body = document.getElementById('elecPumpBody');
+  body.innerHTML = plant.elec.pumps.map((ep, i) => {
+    const feedMode = state.pumps[i].feedMode;
+    return `<tr>
+      <td>P-${ep.id}</td>
+      <td>${feedMode === 'BYPASS' ? '<span class="alarm-active">BYPASS(DOL)</span>' : 'VFD'}</td>
+      <td>${fmt(ep.currentPu * 100, 0)}%</td>
+      <td>${fmt(ep.thermalState * 100, 0)}%${ep.tripReason === 'OVERLOAD' ? ' ⚠트립' : ''}</td>
+      <td>${ep.phaseLossInjected ? (ep.tripReason === 'PHASE_LOSS' ? '트립' : '주입중') : '-'}</td>
+    </tr>`;
+  }).join('');
+}
+function renderPQ() {
+  setText(document.getElementById('essStatus'), plant.pq.essActive ? 'ON (무효전력 주입 중)' : 'OFF');
+  const body = document.getElementById('sagLogBody');
+  body.innerHTML = plant.pq.eventLog.slice(0, 30).map(e => {
+    const causeLabel = { INTERNAL_LOAD_START: '구내 대부하 기동', GRID_SIDE_FAULT: '계통측 사고', COMBINED: '복합', UNKNOWN: '-' }[e.cause] || e.cause;
+    return `<tr>
+      <td>${e.startSimS.toFixed(2)}s</td>
+      <td>${(e.minVoltagePu * 100).toFixed(0)}%</td>
+      <td>${(e.durationS * 1000).toFixed(0)}ms</td>
+      <td>${causeLabel}</td>
+    </tr>`;
+  }).join('');
+}
+function renderSensors() {
+  setText(document.getElementById('sensTrueTemp'), fmt(state.supplyTempC, 2) + '°C');
+  setText(document.getElementById('sensMeasTemp'), fmt(plant.sensors.supplyTemp.measuredValue, 2) + '°C');
+  setText(document.getElementById('sensTrueFlow'), fmt(state.flowTotalM3h, 1) + ' m³/h');
+  setText(document.getElementById('sensMeasFlow'), fmt(plant.sensors.flow.measuredValue, 1) + ' m³/h');
+}
 function render() {
   renderPID();
   renderPanels();
+  renderElectrical();
+  renderPQ();
+  renderSensors();
 }
 
 /* ---------------------------- 시뮬레이션 틱 (렌더링 포함, 브라우저 전용) ---------------------------- */
 function tick() {
-  SimCore.tick(state, shadow); // rng 생략 → Math.random 사용(기존과 동일)
+  const { pqSubsteps } = SimPlant.tick(plant, Math.random); // rng 생략 시 내부에서 Math.random 사용(기존과 동일)
   render();
+  samplePQTrend(pqSubsteps);
   if (state.tickCount % 5 === 0) sampleTrend();
 }
 
@@ -593,12 +740,59 @@ function bindUI() {
   });
 
   document.getElementById('alarmBannerAckAll').addEventListener('click', () => SimCore.ackAllCritical(state));
+
+  // --- 전기 계층 데모 컨트롤 ---
+  const btnVfdFault1 = document.getElementById('btnVfdFault1');
+  btnVfdFault1.addEventListener('click', () => {
+    const on = state.pumps[0].feedMode !== 'BYPASS';
+    SimPlant.injectVfdFault(plant, 1, on);
+    btnVfdFault1.classList.toggle('active', on);
+    btnVfdFault1.textContent = on ? 'P-1 VFD 복구' : 'P-1 VFD 고장(바이패스 절체)';
+  });
+  const btnPhaseLoss1 = document.getElementById('btnPhaseLoss1');
+  btnPhaseLoss1.addEventListener('click', () => {
+    const on = !plant.elec.pumps[0].phaseLossInjected;
+    SimPlant.injectPhaseLoss(plant, 1, on);
+    btnPhaseLoss1.classList.toggle('active', on);
+  });
+  const btnMechOverload1 = document.getElementById('btnMechOverload1');
+  btnMechOverload1.addEventListener('click', () => {
+    const on = plant.elec.pumps[0].mechanicalOverloadMult <= 1.0;
+    // 6.0배: 정격전류의 600% 상당 — NEMA Class10 트립곡선상 냉간 약 10초에 트립(sim-electrical.js 참조)
+    SimPlant.injectMechanicalOverload(plant, 1, on ? 6.0 : 1.0);
+    btnMechOverload1.classList.toggle('active', on);
+  });
+  document.getElementById('btnGridSagInject').addEventListener('click', () => {
+    SimPlant.injectExternalGridSag(plant, 0.15);
+    setTimeout(() => SimPlant.injectExternalGridSag(plant, 0), 3000);
+  });
+
+  // --- 센서 계층 데모 컨트롤 ---
+  const sensorDegradeSlider = document.getElementById('sensorDegradeSlider');
+  sensorDegradeSlider.addEventListener('input', () => {
+    const pct = Number(sensorDegradeSlider.value);
+    SimPlant.injectSensorDegradation(plant, 'supplyTemp', pct / 100);
+    document.getElementById('sensorDegradeVal').textContent = pct + '%';
+  });
+  const btnSensorStuck = document.getElementById('btnSensorStuck');
+  btnSensorStuck.addEventListener('click', () => {
+    const on = !plant.sensors.supplyTemp.isStuck;
+    SimPlant.injectSensorStuck(plant, 'supplyTemp', on);
+    btnSensorStuck.classList.toggle('active', on);
+  });
+  const btnFlowRangeStuck = document.getElementById('btnFlowRangeStuck');
+  btnFlowRangeStuck.addEventListener('click', () => {
+    const on = !plant.sensors.flow.isStuck;
+    SimPlant.injectSensorStuck(plant, 'flow', on, plant.sensors.flow.rangeMax);
+    btnFlowRangeStuck.classList.toggle('active', on);
+  });
 }
 
 /* ---------------------------- 초기화 ---------------------------- */
 function init() {
   buildPID();
   initChart();
+  initPQChart();
   bindUI();
   renderFaultPanel();
   setInterval(tick, CONST.INNER_PERIOD_MS);

@@ -1,0 +1,3 @@
+case,minVoltagePct,floorPct,breachesFloor
+normal_single_start,89.54,85,false
+bypass_simultaneous_start,83.57,85,true

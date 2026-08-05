@@ -1,0 +1,2 @@
+scenario,deviationThresholdC,deviationExceededAtS,diagFirstActiveAtS,everDetected,blindSpotDurationS,finalDeviationC
+I_sensor_drift_long_run,1,3.4000000000000017,,false,3596.599999997821,1.891

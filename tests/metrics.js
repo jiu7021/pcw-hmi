@@ -120,11 +120,73 @@ function computePumpBalance(pumps) {
   };
 }
 
+/* ---- 센서 드리프트 "미검출 구간" 길이 ----
+ * driftSeries: [{t, trueV, measV, diagActive}]
+ * deviationThresholdC(대표값 1.0°C): "이 정도 어긋나면 실무에서 문제가 될 만하다"고
+ * 볼 수 있는 대표적 편차 폭 — 명확한 산업표준은 없는 가정치. 그 편차에 처음
+ * 도달한 시각부터, 진단(범위이탈/고착/정합성)이 처음 발동한 시각까지의 간격을
+ * "미검출 구간"으로 본다. 오프셋 드리프트는 이 시뮬레이터가 구현한 진단 어느
+ * 것으로도 원천적으로 검출되지 않도록 설계했으므로(README 참조), 대개는
+ * diagFirstActiveAtS가 null로 나오는 것 자체가 의도된 결과다.
+ */
+function computeDriftBlindSpot(driftSeries, deviationThresholdC) {
+  deviationThresholdC = deviationThresholdC ?? 1.0;
+  let deviationExceededAtS = null;
+  let diagFirstActiveAtS = null;
+  for (const p of driftSeries) {
+    const dev = Math.abs(p.trueV - p.measV);
+    if (deviationExceededAtS === null && dev >= deviationThresholdC) deviationExceededAtS = p.t;
+    if (diagFirstActiveAtS === null && p.diagActive) diagFirstActiveAtS = p.t;
+  }
+  const last = driftSeries[driftSeries.length - 1];
+  const finalDeviationC = last ? Math.abs(last.trueV - last.measV) : 0;
+  const blindSpotEndS = diagFirstActiveAtS != null ? diagFirstActiveAtS : (last ? last.t : null);
+  return {
+    deviationThresholdC,
+    deviationExceededAtS,
+    diagFirstActiveAtS,
+    everDetected: diagFirstActiveAtS !== null,
+    blindSpotDurationS: (deviationExceededAtS != null && blindSpotEndS != null) ? (blindSpotEndS - deviationExceededAtS) : null,
+    finalDeviationC,
+  };
+}
+
+/* ---- sag 이벤트 통계 (깊이/지속시간) ---- */
+function computeSagStats(eventLog) {
+  if (!eventLog.length) return { count: 0, avgDurationMs: 0, maxDurationMs: 0, avgDepthPct: 0, maxDepthPct: 0 };
+  const durationsMs = eventLog.map(e => e.durationS * 1000);
+  const depthsPct = eventLog.map(e => (1 - e.minVoltagePu) * 100);
+  return {
+    count: eventLog.length,
+    avgDurationMs: durationsMs.reduce((a, b) => a + b, 0) / durationsMs.length,
+    maxDurationMs: Math.max(...durationsMs),
+    avgDepthPct: depthsPct.reduce((a, b) => a + b, 0) / depthsPct.length,
+    maxDepthPct: Math.max(...depthsPct),
+  };
+}
+
+/* ---- 바이패스 절체 후 정상상태 온도편차 (시나리오 J) ----
+ * trendSeries: [{t, v}] (공급온도), changeoverAtS 이후 마지막 tailWindowS초
+ * 평균과 SP의 차이를 "절체 후에도 제어가 유지되는가"의 척도로 쓴다.
+ */
+function computeChangeoverSteadyStateError(trendSeries, changeoverAtS, spTempC, tailWindowS) {
+  tailWindowS = tailWindowS ?? 30;
+  const after = trendSeries.filter(p => p.t >= changeoverAtS);
+  if (!after.length) return null;
+  const lastT = after[after.length - 1].t;
+  const tail = after.filter(p => p.t >= lastT - tailWindowS);
+  const tailAvg = tail.reduce((s, p) => s + p.v, 0) / tail.length;
+  return { tailAvgC: tailAvg, errorC: tailAvg - spTempC, tailWindowS };
+}
+
 module.exports = {
   computeStagingToggles,
   analyzeStepResponse,
   analyzeDisturbanceRejection,
   computePumpBalance,
+  computeDriftBlindSpot,
+  computeSagStats,
+  computeChangeoverSteadyStateError,
   THEORETICAL_MAX_TOGGLES_PER_MIN,
   HUNTING_WARN_THRESHOLD_PER_MIN,
 };

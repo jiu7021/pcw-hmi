@@ -75,56 +75,68 @@ function createInvariant4_MinFlowProtection(dtInnerS) {
 
 /* ---- 5) CV가 포화된 동안 적분항의 절대값이 증가하지 않는다 (anti-windup) ----
  *
- * 주의(중요한 해석 판단, 최초 구현에서 실제로 틀렸다가 고친 부분):
- * "적분항의 절대값이 증가하지 않는다"를 방향과 무관하게 |I|로만 검사했더니,
- * 정상적으로 설계된 조건부 적분(conditional integration)에서도 위반으로
- * 잘못 잡히는 경우가 있었다 — CV가 하한에 붙어 있고 적분이 "포화를 해소하는
- * 방향"(즉 하한에서 벗어나 CV를 밀어올리는 방향)으로 커지는 중이면, 그건
- * anti-windup이 의도한 정상 동작이지 windup이 아니다(원본 요구사항 2번
- * "포화 해소 방향의 오차는 계속 적분한다"와 정확히 일치). 그래서 이 invariant는
- * "절대값 증가"가 아니라 "포화를 심화시키는 방향으로의 증가"만 위반으로 본다:
- *   - 상한 포화 중: 적분이 (부호 그대로) 더 커지면 위반 (Ki≥0이므로 출력을 더 위로 민다)
- *   - 하한 포화 중: 적분이 (부호 그대로) 더 작아지면 위반 (출력을 더 아래로 민다)
- * 이 시뮬레이터의 모든 Ki는 0 이상(튜닝 패널 슬라이더도 min=0)이므로 이 방향 가정이 성립한다.
+ * 주의(중요한 해석 판단 두 가지, 둘 다 최초 구현에서 실제로 틀렸다가 고친 것):
+ *
+ * (a) 방향 구분. "적분항의 절대값이 증가하지 않는다"를 방향과 무관하게 |I|로만
+ * 검사했더니, 정상적으로 설계된 조건부 적분(conditional integration)에서도
+ * 위반으로 잘못 잡히는 경우가 있었다 — CV가 하한에 붙어 있고 적분이 "포화를
+ * 해소하는 방향"(하한에서 벗어나 CV를 밀어올리는 방향)으로 커지는 중이면,
+ * 그건 anti-windup이 의도한 정상 동작이지 windup이 아니다(원본 요구사항 2번
+ * "포화 해소 방향의 오차는 계속 적분한다"와 정확히 일치). 그래서 "절대값 증가"가
+ * 아니라 "포화를 심화시키는 방향으로의 증가"만 본다: 상한 포화 중엔 적분이
+ * (부호 그대로) 커질 때만, 하한 포화 중엔 작아질 때만 위반(Ki≥0 가정 — 이
+ * 시뮬레이터의 모든 Ki는 0 이상, 튜닝 패널 슬라이더도 min=0).
+ *
+ * (b) "막 도달"과 "이미 붙어있었음"의 구분. CV가 이번 틱에 "처음으로" 경계값에
+ * 정확히 도달한 경우(직전 틱엔 경계값이 아니었음)까지 위반으로 잡으면 너무
+ * 엄격하다 — 정상적인 비례+적분 동작이 우연히 경계값에 정확히 착지한 것일 뿐,
+ * "이미 포화된 상태에서 계속 밀어붙인" 진짜 windup이 아니기 때문이다(다중 시드
+ * 스트레스 테스트에서 실제로 이 경계 사례가 나와 확인 후 고쳤다). 그래서 직전
+ * 틱과 이번 틱 "둘 다" 같은 경계값에 있을 때만(=한 틱이라도 그 경계에 머물러
+ * 있었다는 뜻) 위반 판정 대상으로 삼는다.
  *
  * outerFlowSpBounds/innerSpeedBounds는 sim-core.js가 export하는, "CV에 실제로
  * 적용되는 참 상하한"이다(제어 로직 자체와는 별개의 계약 함수).
  */
-function windupViolation(label, cvValue, bounds, curI, prevI) {
-  const atMax = Math.abs(cvValue - bounds.max) < EPS;
-  const atMin = Math.abs(cvValue - bounds.min) < EPS;
-  if (atMax && curI > prevI + EPS) {
-    return `${label} CV=${cvValue.toFixed(2)}(상한 ${bounds.max.toFixed(2)}) 포화 중 적분이 심화방향(+)으로 증가: ${prevI.toFixed(4)} → ${curI.toFixed(4)}`;
+function windupViolation(label, curCV, prevCV, bounds, curI, prevI) {
+  const curAtMax = Math.abs(curCV - bounds.max) < EPS;
+  const prevAtMax = Math.abs(prevCV - bounds.max) < EPS;
+  const curAtMin = Math.abs(curCV - bounds.min) < EPS;
+  const prevAtMin = Math.abs(prevCV - bounds.min) < EPS;
+  if (curAtMax && prevAtMax && curI > prevI + EPS) {
+    return `${label} CV=${curCV.toFixed(2)}(상한 ${bounds.max.toFixed(2)}) 포화 지속 중 적분이 심화방향(+)으로 증가: ${prevI.toFixed(4)} → ${curI.toFixed(4)}`;
   }
-  if (atMin && curI < prevI - EPS) {
-    return `${label} CV=${cvValue.toFixed(2)}(하한 ${bounds.min.toFixed(2)}) 포화 중 적분이 심화방향(-)으로 감소: ${prevI.toFixed(4)} → ${curI.toFixed(4)}`;
+  if (curAtMin && prevAtMin && curI < prevI - EPS) {
+    return `${label} CV=${curCV.toFixed(2)}(하한 ${bounds.min.toFixed(2)}) 포화 지속 중 적분이 심화방향(-)으로 감소: ${prevI.toFixed(4)} → ${curI.toFixed(4)}`;
   }
   return null;
 }
 function createInvariant5_AntiWindup() {
-  let prev = null; // {outerI, innerI, mode, structure}
+  let prev = null; // {outerI, innerI, flowSp, speedCmd, mode, structure}
   return function check(state) {
     const cur = {
       outerI: state.outerPid.integral,
       innerI: state.innerPid.integral,
+      flowSp: state.flowSpM3h,
+      speedCmd: state.speedCmdPct,
       mode: state.mode,
       structure: state.controlStructure,
     };
     const violations = [];
-    // 모드/제어구조가 바뀐 직후는 비교 대상(직전 적분값의 "의미")이 달라지므로 건너뛴다.
+    // 모드/제어구조가 바뀐 직후는 비교 대상(직전 값의 "의미")이 달라지므로 건너뛴다.
     const comparable = prev && prev.mode === cur.mode && prev.structure === cur.structure;
 
     if (comparable && state.masterOn && state.mode === 'AUTO') {
       if (state.controlStructure === 'CASCADE') {
         const ob = SimCore.outerFlowSpBounds(state);
-        const v1 = windupViolation('외부루프', state.flowSpM3h, ob, cur.outerI, prev.outerI);
+        const v1 = windupViolation('외부루프', cur.flowSp, prev.flowSp, ob, cur.outerI, prev.outerI);
         if (v1) violations.push(v1);
         const ib = SimCore.innerSpeedBounds(state);
-        const v2 = windupViolation('내부루프', state.speedCmdPct, ib, cur.innerI, prev.innerI);
+        const v2 = windupViolation('내부루프', cur.speedCmd, prev.speedCmd, ib, cur.innerI, prev.innerI);
         if (v2) violations.push(v2);
       } else {
         // 단일루프는 innerPid를 재사용하고 상하한은 0~100 고정(singleLoopStep 참조)
-        const v3 = windupViolation('단일루프', state.speedCmdPct, { min: 0, max: 100 }, cur.innerI, prev.innerI);
+        const v3 = windupViolation('단일루프', cur.speedCmd, prev.speedCmd, { min: 0, max: 100 }, cur.innerI, prev.innerI);
         if (v3) violations.push(v3);
       }
     }
@@ -165,6 +177,46 @@ function createInvariant6_AlarmHysteresis(minRetriggerS) {
   };
 }
 
+/* ---- 7) 센서 고장(고착/열화) 중에도 CV가 정의된 상하한을 벗어나지 않는다 ----
+ * stepPID의 clamp()가 구조적으로 항상 보장해야 하는 성질이지만, "엉터리
+ * 측정값이 들어와도 액추에이터 지령이 폭주하지 않는다"는 것을 센서 계층을
+ * 도입한 뒤에도 명시적으로 재확인하기 위한 회귀 방지용 체크.
+ */
+function createInvariant7_CVBoundedUnderSensorFault() {
+  return function check(state) {
+    if (!(state.masterOn && state.mode === 'AUTO')) return [];
+    const violations = [];
+    if (state.controlStructure === 'CASCADE') {
+      const ob = SimCore.outerFlowSpBounds(state);
+      if (state.flowSpM3h < ob.min - EPS || state.flowSpM3h > ob.max + EPS) {
+        violations.push(`flowSpM3h(${state.flowSpM3h.toFixed(2)})가 상하한[${ob.min.toFixed(2)},${ob.max.toFixed(2)}] 밖`);
+      }
+      const ib = SimCore.innerSpeedBounds(state);
+      if (state.speedCmdPct < ib.min - EPS || state.speedCmdPct > ib.max + EPS) {
+        violations.push(`speedCmdPct(${state.speedCmdPct.toFixed(2)})가 상하한[${ib.min.toFixed(2)},${ib.max.toFixed(2)}] 밖`);
+      }
+    } else if (state.speedCmdPct < -EPS || state.speedCmdPct > 100 + EPS) {
+      violations.push(`(단일루프) speedCmdPct(${state.speedCmdPct.toFixed(2)})가 상하한[0,100] 밖`);
+    }
+    return violations;
+  };
+}
+
+/* ---- 8) 정상 대수제어(인터록이 지켜지는 상태) 중 모선전압이 관리한계 아래로 내려가지 않는다 ----
+ * plant(전기 계층)가 있을 때만 의미가 있다 — plant가 없으면(기존 6종 검증
+ * 스위트처럼 SimCore만 도는 경우) 아무것도 하지 않는다.
+ */
+function createInvariant8_VoltageFloorUnderNormalOps(floorPu) {
+  floorPu = floorPu ?? 0.85; // sim-power-quality.js CONST.VOLTAGE_MANAGEMENT_FLOOR_PU 값과 동일(대표값)
+  return function check(state, plant) {
+    if (!plant || !plant.elec) return [];
+    if (plant.elec.busVoltagePu < floorPu - EPS) {
+      return [`정상 운전 중 모선전압 ${(plant.elec.busVoltagePu * 100).toFixed(1)}% < 관리한계 ${(floorPu * 100).toFixed(0)}%`];
+    }
+    return [];
+  };
+}
+
 // 시나리오 러너가 사용할 표준 목록: [id, 설명, 팩토리]
 function createAllInvariants(dtInnerS) {
   return [
@@ -177,8 +229,17 @@ function createAllInvariants(dtInnerS) {
   ];
 }
 
+// 확장 스위트(전기/전력품질/센서/통신 계층 포함 plant 시나리오)가 쓰는 8종 전체 목록
+function createExtendedInvariants(dtInnerS) {
+  return createAllInvariants(dtInnerS).concat([
+    { id: 'INV7_CV_BOUNDED_UNDER_SENSOR_FAULT', desc: '센서 고장 중에도 CV가 상하한을 벗어나지 않음', check: createInvariant7_CVBoundedUnderSensorFault() },
+    { id: 'INV8_VOLTAGE_FLOOR_NORMAL_OPS', desc: '정상 대수제어 중 모선전압이 관리한계 이상 유지', check: createInvariant8_VoltageFloorUnderNormalOps() },
+  ]);
+}
+
 module.exports = {
   createAllInvariants,
+  createExtendedInvariants,
   MIN_RETRIGGER_S,
   createInvariant1_NoSimultaneousStarting,
   createInvariant2_FaultNeverRunning,
@@ -186,4 +247,6 @@ module.exports = {
   createInvariant4_MinFlowProtection,
   createInvariant5_AntiWindup,
   createInvariant6_AlarmHysteresis,
+  createInvariant7_CVBoundedUnderSensorFault,
+  createInvariant8_VoltageFloorUnderNormalOps,
 };

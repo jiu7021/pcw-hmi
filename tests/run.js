@@ -21,6 +21,9 @@ const SimCore = require('../sim-core.js');
 const { runSimulation } = require('./runner.js');
 const scenarios = require('./scenarios.js');
 const metrics = require('./metrics.js');
+const { runPlantSimulation } = require('./runner-plant.js');
+const plantScenarios = require('./scenarios-plant.js');
+const { runInterlockBypassDemo } = require('./sag-demo.js');
 
 const RESULTS_DIR = path.join(__dirname, 'results');
 if (!fs.existsSync(RESULTS_DIR)) fs.mkdirSync(RESULTS_DIR, { recursive: true });
@@ -177,14 +180,88 @@ for (const structure of ['CASCADE', 'SINGLE']) {
   console.log(`  [${structure}] 상승스텝 최대편차 ${up.peakDeviation.toFixed(2)}°C / 복귀 ${up.recoveryTimeS == null ? 'N/A' : up.recoveryTimeS.toFixed(1) + 's'}${violationCount ? ` ⚠위반${violationCount}건` : ''}`);
 }
 
-/* ---------------------------- 3) CSV 저장 ---------------------------- */
-console.log('\n=== 3/3 결과 저장 ===');
+/* ---------------------------- 3) 확장 스위트: 전기/전력품질/센서/통신 ---------------------------- */
+console.log('\n=== 3/4 확장 스위트 (전기·전력품질·센서 계층, 시나리오 H/I/J) ===');
+const extendedInvariantIds = allInvariantIds.concat(['INV7_CV_BOUNDED_UNDER_SENSOR_FAULT', 'INV8_VOLTAGE_FLOOR_NORMAL_OPS']);
+const sagStatsRows = [];
+const driftBlindSpotRows = [];
+const changeoverRows = [];
+
+for (const scn of plantScenarios.allPlantScenarios()) {
+  const result = runPlantSimulation(scn);
+  const byInv = {};
+  for (const id of extendedInvariantIds) byInv[id] = [];
+  for (const v of result.violations) byInv[v.invariantId].push(v);
+  for (const id of extendedInvariantIds) {
+    const vs = byInv[id];
+    invariantRows.push({
+      scenario: scn.name, invariant: id, status: vs.length ? 'FAIL' : 'PASS',
+      violationCount: vs.length,
+      firstViolationSimS: vs.length ? vs[0].simTimeS : '',
+      firstViolationMessage: vs.length ? vs[0].message : '',
+    });
+  }
+  allViolations.push(...result.violations);
+
+  const sag = metrics.computeSagStats(result.plant.pq.eventLog);
+  sagStatsRows.push({ scenario: scn.name, sagCount: sag.count, avgDepthPct: +sag.avgDepthPct.toFixed(2), maxDepthPct: +sag.maxDepthPct.toFixed(2), avgDurationMs: +sag.avgDurationMs.toFixed(1), maxDurationMs: +sag.maxDurationMs.toFixed(1) });
+
+  if (scn.recordDrift) {
+    const bs = metrics.computeDriftBlindSpot(result.driftSeries);
+    driftBlindSpotRows.push({
+      scenario: scn.name, deviationThresholdC: bs.deviationThresholdC,
+      deviationExceededAtS: bs.deviationExceededAtS, diagFirstActiveAtS: bs.diagFirstActiveAtS,
+      everDetected: bs.everDetected, blindSpotDurationS: bs.blindSpotDurationS, finalDeviationC: +bs.finalDeviationC.toFixed(3),
+    });
+  }
+
+  let changeoverNote = '';
+  if (scn.name === 'J_vfd_fault_bypass_failover' && scn.meta) {
+    // TOLERANCE_C(±2°C): "절체 후에도 제어가 유지되었다"고 볼 수 있는 대표
+    // 허용폭 — 정상 시나리오들의 정상상태편차(steadyStateErrorC, 대개 0.01°C
+    // 미만)보다 훨씬 넉넉하게 잡아, 바이패스로 고정속도 펌프가 섞여 정밀도는
+    // 다소 떨어지더라도 "제어 자체는 살아있다"는 것만 확인하는 취지의 가정치.
+    const TOLERANCE_C = 2.0;
+    // runPlantSimulation은 트렌드를 저장하지 않으므로 최종 상태의 정상상태
+    // 편차만 본다(장시간 평균 대신 마지막 30초를 재현하려면 별도 트렌드 기록이
+    // 필요하지만, 이 시나리오는 pass/fail 목적이 아니라 "제어가 살아있는가"를
+    // 확인하는 목적이라 마지막 시점의 오차로 충분하다).
+    const finalErrorC = result.state.supplyTempC - result.state.spTempC;
+    const maintained = Math.abs(finalErrorC) <= TOLERANCE_C;
+    changeoverRows.push({
+      scenario: scn.name, vfdFaultAtS: scn.meta.vfdFaultAtS,
+      finalSupplyTempC: +result.state.supplyTempC.toFixed(3), spTempC: result.state.spTempC,
+      finalErrorC: +finalErrorC.toFixed(3), toleranceC: TOLERANCE_C, controlMaintained: maintained,
+      pump1FeedMode: result.state.pumps[0].feedMode, pump1Status: result.state.pumps[0].status,
+    });
+    changeoverNote = ` — 바이패스 절체 후 온도제어 유지: ${maintained ? 'YES' : 'NO'}(오차 ${finalErrorC.toFixed(2)}°C)`;
+  }
+
+  const pass = result.violations.length === 0;
+  console.log(`[시나리오 ${scn.name}] ${pass ? 'PASS' : 'FAIL(' + result.violations.length + '건 위반)'} — sag ${sag.count}건(최대깊이 ${sag.maxDepthPct.toFixed(1)}%)${changeoverNote}`);
+}
+
+console.log('\n  [동시기동 인터록 우회 데모 — 정식 시나리오 아님, 상수 근거 실증용]');
+const bypassDemo = runInterlockBypassDemo();
+console.log(`    정상(1대 기동): 최저전압 ${bypassDemo.normalCase.minVoltagePct.toFixed(1)}% (관리한계 ${bypassDemo.floorPct}% ${bypassDemo.normalCase.breachesFloor ? '위반' : '준수'})`);
+console.log(`    우회(2대 동시기동): 최저전압 ${bypassDemo.bypassCase.minVoltagePct.toFixed(1)}% (관리한계 ${bypassDemo.floorPct}% ${bypassDemo.bypassCase.breachesFloor ? '위반' : '준수'})`);
+console.log(`    → 인터록의 필요성이 수치로 증명됨: ${bypassDemo.demonstratesInterlockNecessity}`);
+
+/* ---------------------------- 4) CSV 저장 ---------------------------- */
+console.log('\n=== 4/4 결과 저장 ===');
 writeCSV('invariants.csv', invariantRows);
 writeCSV('scenario_metrics.csv', scenarioMetricRows);
 writeCSV('step_response.csv', stepResponseRows);
 writeCSV('pump_balance.csv', pumpBalanceRows);
 writeCSV('gain_sweep.csv', gainSweepRows);
 writeCSV('structure_sweep.csv', structureSweepRows);
+writeCSV('sag_stats.csv', sagStatsRows);
+writeCSV('drift_blind_spot.csv', driftBlindSpotRows);
+writeCSV('bypass_changeover.csv', changeoverRows);
+writeCSV('interlock_bypass_demo.csv', [
+  { case: 'normal_single_start', minVoltagePct: +bypassDemo.normalCase.minVoltagePct.toFixed(2), floorPct: bypassDemo.floorPct, breachesFloor: bypassDemo.normalCase.breachesFloor },
+  { case: 'bypass_simultaneous_start', minVoltagePct: +bypassDemo.bypassCase.minVoltagePct.toFixed(2), floorPct: bypassDemo.floorPct, breachesFloor: bypassDemo.bypassCase.breachesFloor },
+]);
 // 위반이 없어도 항상 갱신한다 — 그렇지 않으면 과거 실패 실행의 잔재 파일이
 // 남아 "지금도 실패 중"인 것처럼 보이는 오해를 일으킨다.
 const violationsPath = path.join(RESULTS_DIR, 'violations.json');
@@ -198,12 +275,12 @@ console.log(`  → tests/results/*.csv 저장 완료 (${fs.readdirSync(RESULTS_D
 /* ---------------------------- 최종 PASS/FAIL 요약 ---------------------------- */
 console.log('\n=== 최종 요약 ===');
 const invByType = {};
-for (const id of allInvariantIds) invByType[id] = { pass: 0, fail: 0 };
+for (const id of extendedInvariantIds) invByType[id] = { pass: 0, fail: 0 };
 for (const row of invariantRows) {
   if (row.status === 'PASS') invByType[row.invariant].pass++; else invByType[row.invariant].fail++;
 }
 let anyFail = false;
-for (const id of allInvariantIds) {
+for (const id of extendedInvariantIds) {
   const s = invByType[id];
   const ok = s.fail === 0;
   if (!ok) anyFail = true;
@@ -215,9 +292,9 @@ if (anyFail) {
   console.log('가장 이른 위반 상세 상태 덤프 (최대 5건):');
   allViolations.slice(0, 5).forEach(v => {
     console.log(`  - [${v.scenario} / ${v.invariantId} @ t=${v.simTimeS}s] ${v.message}`);
-    console.log(`    state: ${JSON.stringify(v.stateDump)}`);
+    if (v.stateDump) console.log(`    state: ${JSON.stringify(v.stateDump)}`);
   });
   process.exitCode = 1;
 } else {
-  console.log('\n✅ 6종 안전 불변조건 전부 PASS (시나리오 A~F + 게인배치시험 + 구조비교, 전 틱 기준)');
+  console.log('\n✅ 8종 안전 불변조건 전부 PASS (시나리오 A~F, H/I/J, 게인배치시험, 구조비교, 전 틱 기준)');
 }

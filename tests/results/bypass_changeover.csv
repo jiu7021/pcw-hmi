@@ -1,0 +1,2 @@
+scenario,vfdFaultAtS,finalSupplyTempC,spTempC,finalErrorC,toleranceC,controlMaintained,pump1FeedMode,pump1Status
+J_vfd_fault_bypass_failover,100,20.99,21,-0.01,2,true,BYPASS,RUNNING

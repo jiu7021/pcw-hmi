@@ -1,0 +1,71 @@
+/* =============================================================================
+ * tests/sag-demo.js — "동시 기동 금지" 인터록의 근거를 수치로 증명하는 데모 스크립트.
+ *
+ * 이것은 정식 시나리오(pass/fail 판정 대상)가 아니다 — 실제 앱은 anyPumpStarting
+ * 잠금 때문에 두 펌프가 절대 동시에 STARTING이 될 수 없으므로(INV1이 항상
+ * 보장), "인터록을 어기면 무슨 일이 나는가"는 정상 실행 경로에서는 관측할 수
+ * 없다. 그래서 sim-electrical.js/sim-power-quality.js를 SimCore 없이 직접
+ * 호출해 인터록을 코드 레벨에서 일부러 우회한 가상의 펌프 상태를 만들고,
+ * 그 결과 모선전압이 관리한계(85%)를 실제로 넘는지 확인한다.
+ *
+ * 두 케이스 모두 급전모드를 BYPASS(DOL)로 둔다 — VFD 정상 기동은 돌입이
+ * 거의 없어(정격의 110~150%) 아무리 겹쳐도 관리한계를 위협하지 않는다는
+ * 것이 sim-electrical.js의 핵심 전제이기 때문에, "왜 동시 기동을 막아야
+ * 하는가"를 증명하려면 정확히 그 문제가 실제로 발생하는 조건(VFD 고장 시
+ * 상용전원 직입 상태에서 두 대가 겹치는 경우)을 재현해야 의미가 있다.
+ * ========================================================================= */
+const ElecLayer = require('../sim-electrical.js');
+const PQLayer = require('../sim-power-quality.js');
+
+function runInterlockBypassDemo() {
+  const dt = 0.1;
+
+  // 케이스 A(정상): VFD 2대 정격운전 중 1대가 바이패스(DOL)로 정상적으로
+  // (인터록 지켜) 기동 — 예: 그 1대만 VFD 고장으로 바이패스 절체된 상황.
+  const esA = ElecLayer.createElecState();
+  const pqA = PQLayer.createPQState();
+  let tA = 0;
+  const pumpsA = [
+    { id: 1, status: 'STARTING', speedPct: 0, fault: false, startTimer: 0, feedMode: 'BYPASS' },
+    { id: 2, status: 'RUNNING', speedPct: 100, fault: false, startTimer: 0, feedMode: 'VFD' },
+    { id: 3, status: 'RUNNING', speedPct: 100, fault: false, startTimer: 0, feedMode: 'VFD' },
+  ];
+  let minVA = 1.0;
+  for (let i = 0; i < 50; i++) {
+    tA += dt; pumpsA[0].startTimer = tA;
+    ElecLayer.update(esA, pumpsA, dt);
+    PQLayer.update(pqA, esA, tA, dt);
+    if (esA.busVoltagePu < minVA) minVA = esA.busVoltagePu;
+  }
+
+  // 케이스 B(인터록 우회 가정): VFD 1대 운전 중 나머지 2대가 "동시에"
+  // 바이패스(DOL)로 STARTING — 예: 2대가 동시에 VFD 고장이 나서 동시에
+  // 절체를 시도하는 상황. (실제 앱에서는 startPump()의 anyPumpStarting
+  // 잠금 때문에 이 상태 자체가 만들어질 수 없다 — 여기서는 그 잠금을
+  // 거치지 않고 직접 pump 배열을 구성해 "막지 않았다면 어떻게 되는가"를 본다.)
+  const esB = ElecLayer.createElecState();
+  const pqB = PQLayer.createPQState();
+  let tB = 0;
+  const pumpsB = [
+    { id: 1, status: 'STARTING', speedPct: 0, fault: false, startTimer: 0, feedMode: 'BYPASS' },
+    { id: 2, status: 'STARTING', speedPct: 0, fault: false, startTimer: 0, feedMode: 'BYPASS' },
+    { id: 3, status: 'RUNNING', speedPct: 100, fault: false, startTimer: 0, feedMode: 'VFD' },
+  ];
+  let minVB = 1.0;
+  for (let i = 0; i < 50; i++) {
+    tB += dt; pumpsB[0].startTimer = tB; pumpsB[1].startTimer = tB;
+    ElecLayer.update(esB, pumpsB, dt);
+    PQLayer.update(pqB, esB, tB, dt);
+    if (esB.busVoltagePu < minVB) minVB = esB.busVoltagePu;
+  }
+
+  const floor = PQLayer.CONST.VOLTAGE_MANAGEMENT_FLOOR_PU;
+  return {
+    floorPct: floor * 100,
+    normalCase: { minVoltagePct: minVA * 100, breachesFloor: minVA < floor },
+    bypassCase: { minVoltagePct: minVB * 100, breachesFloor: minVB < floor },
+    demonstratesInterlockNecessity: (minVA >= floor) && (minVB < floor),
+  };
+}
+
+module.exports = { runInterlockBypassDemo };
