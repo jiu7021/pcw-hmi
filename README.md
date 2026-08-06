@@ -1,5 +1,7 @@
 # PCW HMI 시뮬레이터
 
+**[▶ 시뮬레이터 실행](https://jiu7021.github.io/pcw-hmi/)**
+
 반도체 팹 유틸리티의 **공정냉각수(PCW, Process Cooling Water) 시스템**을
 브라우저에서 동작하는 단일 HTML 파일로 재현한 SCADA 스타일 HMI 시뮬레이터입니다.
 
