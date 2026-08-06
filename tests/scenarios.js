@@ -16,11 +16,20 @@ function scenarioA() {
   };
 }
 
-/* B. 급격한 부하 스텝 (저→고, 고→저) — 게인 배치 시험/단일vs캐스케이드 비교에도 재사용. */
+/* B. 급격한 부하 스텝 (저→고, 고→저) — 게인 배치 시험/단일vs캐스케이드 비교에도 재사용.
+ *
+ * 스텝 간격(stepUpAtS→stepDownAtS 400s, stepDownAtS→durationS 400s) 근거:
+ * 단일 상승스텝만 걸어 격리 측정한 결과(오염 없는 참값) 게인 4세트 중 가장
+ * 느린 Conservative(외부Kp -50%)의 복귀시간이 약 134s였다(±0.3°C 밴드 기준).
+ * 여기에 3배 이상 여유(약 400s)를 둬서, 어떤 게인 세트를 넣어도 다음 스텝이
+ * 오기 전에 응답이 확실히 정착하도록 잡았다. 그래도 못 미치는 경우를 대비해
+ * tests/run.js의 계산 자체도 다음 스텝 시각을 넘지 않는 구간으로 한정한다
+ * (analyzeDisturbanceRejection의 windowEndS) — 간격을 넉넉히 잡는 것과
+ * 계산을 다음 스텝 이전으로 자르는 것, 두 가지를 함께 적용한다. */
 function scenarioB(opts) {
   opts = opts || {};
-  const stepUpAtS = 100, stepDownAtS = 300;
-  const durationS = opts.durationS ?? 500;
+  const stepUpAtS = 100, stepDownAtS = 500;
+  const durationS = opts.durationS ?? 900;
   return {
     name: opts.name || 'B_load_step',
     description: `급격한 부하 스텝 (저${LOAD_LOW_KW}kW→고${LOAD_HIGH_KW}kW @${stepUpAtS}s, 고→저 @${stepDownAtS}s)`,
@@ -33,6 +42,35 @@ function scenarioB(opts) {
     events: [{ atS: 0, fn: (state) => SimCore.masterStart(state) }],
     loadProfile(tSec) { return tSec < stepUpAtS ? LOAD_LOW_KW : (tSec < stepDownAtS ? LOAD_HIGH_KW : LOAD_LOW_KW); },
     meta: { stepUpAtS, stepDownAtS },
+  };
+}
+
+/* B'. 유량측 외란 (배관저항 급증/공급압력 저하 근사) — scenarioB의 열부하 외란과
+ * 대응되는 짝. 캐스케이드/단일루프 구조 비교의 핵심은 "외란이 어느 도메인에
+ * 들어오는가"이므로, scenarioB(열부하=외부루프 도메인)와 이 시나리오(유량=
+ * 내부루프 도메인)를 같은 조건(부하는 중부하로 고정, 단발성 외란 1회, 지속시간
+ * 60s로 동일)으로 나란히 비교한다. 부하를 순환시키지 않고 고정하는 이유는
+ * "유량측 외란의 순수한 효과"만 보기 위함 — 부하가 같이 흔들리면 두 외란이
+ * 섞여 원인을 분리할 수 없다. */
+function scenarioBFlow(opts) {
+  opts = opts || {};
+  const disturbAtS = 100;
+  const durationS = opts.durationS ?? 500; // FLOW_DISTURBANCE_DURATION_S(60s)의 8배 이상 관측
+  return {
+    name: opts.name || 'B_flow_disturbance',
+    description: `유량측 외란 (배관저항 급증/공급압력 저하 근사, 부하 ${LOAD_MED_KW}kW 고정, 외란 @${disturbAtS}s×60s)`,
+    durationS,
+    seed: opts.seed ?? 2001,
+    setup(state) {
+      if (opts.gains) Object.assign(state.gains, opts.gains);
+      if (opts.controlStructure) state.controlStructure = opts.controlStructure;
+    },
+    events: [
+      { atS: 0, fn: (state) => SimCore.masterStart(state) },
+      { atS: disturbAtS, fn: (state) => SimCore.applyFlowDisturbance(state) },
+    ],
+    loadProfile: () => LOAD_MED_KW,
+    meta: { disturbAtS },
   };
 }
 
@@ -125,4 +163,4 @@ const GAIN_SETS = [
   { name: 'PID(D항 추가, Kd=20)', gains: { oKp: 40, oKi: 4, oKd: 20, iKp: 0.3, iKi: 0.15, iKd: 0 } },
 ];
 
-module.exports = { scenarioA, scenarioB, scenarioC, scenarioD, scenarioE, scenarioF, allScenarios, GAIN_SETS };
+module.exports = { scenarioA, scenarioB, scenarioBFlow, scenarioC, scenarioD, scenarioE, scenarioF, allScenarios, GAIN_SETS };

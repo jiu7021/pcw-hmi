@@ -89,10 +89,18 @@ function analyzeStepResponse(series, stepTimeS, targetValue, opts) {
  * 정의가 무의미해진다. 대신 SP로부터의 절대편차로 직접 평가한다.
  * toleranceAbsC 기본값 0.3°C: 명확한 표준은 없고, "정상 운전 범위로 복귀했다"고
  * 볼 수 있는 대표 허용폭으로 잡은 가정치.
+ *
+ * windowEndS(선택): 다음 외란이 들어오는 시각(또는 관측 종료 시각)을 넘겨서
+ * 주면, 그 시각 이후의 데이터는 최대편차·복귀시간 계산에서 완전히 제외한다.
+ * 이 경계가 없으면 "이 스텝에 대한 복귀시간"을 구하는 도중에 다음 스텝의
+ * 외란이 섞여 들어가(예: 상승스텝 복귀를 보다가 하강스텝의 undershoot까지
+ * 같이 잡음), 두 외란이 뒤엉킨 값이 나온다 — 실제로 초기 버전에서 이 문제가
+ * 있었다(README "정착시간 판정 재검토" 절 참조). 경계 안에서 끝까지도 밴드
+ * 안에 못 들어오면 recoveryTimeS는 null(호출부에서 "미정착"으로 명시 처리).
  */
-function analyzeDisturbanceRejection(series, stepTimeS, targetValue, toleranceAbs) {
+function analyzeDisturbanceRejection(series, stepTimeS, targetValue, toleranceAbs, windowEndS) {
   toleranceAbs = toleranceAbs ?? 0.3;
-  const after = series.filter(p => p.t >= stepTimeS);
+  const after = series.filter(p => p.t >= stepTimeS && (windowEndS == null || p.t < windowEndS));
   if (!after.length) return null;
   let peakDeviation = 0;
   after.forEach(p => { const d = Math.abs(p.v - targetValue); if (d > peakDeviation) peakDeviation = d; });
@@ -103,7 +111,7 @@ function analyzeDisturbanceRejection(series, stepTimeS, targetValue, toleranceAb
       if (staysIn) { recoveryTimeS = after[i].t - stepTimeS; break; }
     }
   }
-  return { peakDeviation, recoveryTimeS, toleranceAbs };
+  return { peakDeviation, recoveryTimeS, toleranceAbs, windowS: after.length ? after[after.length - 1].t - stepTimeS : 0 };
 }
 
 /* ---- 펌프별 기동 횟수 / 누적 운전시간 편차 (교번운전이 실제로 균등한가) ---- */

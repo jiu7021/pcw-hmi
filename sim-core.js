@@ -55,6 +55,25 @@
     DISTURBANCE_STEP_KW: 1500,   // kW '외란 인가' 버튼으로 주는 임시 부하 스텝
     DISTURBANCE_DURATION_S: 60,  // s 외란 지속시간
 
+    // ---------- 유량측 외란 (배관 저항 급증 / 공급압력 저하) ----------
+    // 위 열부하 외란은 "외부루프(온도) 도메인"에서 생기는 외란이라 캐스케이드의
+    // 이점(내부의 빠른 유량루프가 외란을 온도까지 번지기 전에 먼저 흡수)이
+    // 드러나지 않는다. 이 외란은 반대로 "내부루프(유량) 도메인"에 직접 걸리는
+    // 외란이다 — 배관 저항이 갑자기 커지거나(밸브 오작동, 스트레이너 막힘 등)
+    // 공급측 압력이 떨어지면, 펌프 속도(%)는 그대로인데 실제로 통과하는 유량은
+    // 줄어든다. sim-core.js는 펌프곡선/헤더압력을 정밀히 풀지 않는 단순화된
+    // 모델이므로(README "플랜트 수치 모델" 참조), 이 현상을 "같은 속도%가 내는
+    // 유량에 곱해지는 배율(<1)이 일시적으로 줄어든다"는 승수 하나로 근사한다 —
+    // 정밀 유체해석이 아니라 캐스케이드/단일루프 구조 차이를 드러내기 위한
+    // 최소한의 장치임을 명시한다.
+    FLOW_DISTURBANCE_FACTOR: 0.7, // 외란 중 유량 = 정상 유량 × 0.7 — 배관저항 급증/압력저하로
+                                   // 같은 속도에서 유량이 30% 줄어드는 상황(대표값). 펌프가
+                                   // 3대까지 증속할 여력이 있어 극단적 유량 고갈(최소유량 보호
+                                   // 진입)까지는 가지 않으면서도, 내부루프가 뚜렷이 반응해야
+                                   // 하는 수준으로 잡았다.
+    FLOW_DISTURBANCE_DURATION_S: 60, // s 열부하 외란(DISTURBANCE_DURATION_S)과 동일하게 맞춰
+                                      // 두 외란 종류를 같은 시간창에서 비교할 수 있게 함.
+
     // ---------- 펌프 (병렬 유량배분은 "운전대수 × 속도"에 비례하는 단순 합산으로 근사) ----------
     PUMP_RATED_FLOW_M3H: 250,    // m3/h 펌프 1대가 속도 100%일 때 내는 유량 — 가정치
     PUMP_MIN_SPEED_PCT: 20,      // % VFD 최소운전속도 — 저속영역 원심펌프 불안정 방지 통념(대표값)
@@ -180,6 +199,10 @@
       anyPumpStarting: false,
 
       disturbanceTimer: 0,
+      flowDisturbanceTimer: 0, // FLOW_DISTURBANCE_DURATION_S 참조
+
+      loadMode: 'CYCLE', // 'CYCLE'(기존 저→중→고 3단 순환) | 'FIXED'(부하 고정, 측정용)
+      fixedLoadKW: CONST.LOAD_MED_KW, // loadMode='FIXED'일 때 쓰는 고정 부하값 — 중부하를 기본값으로
 
       pumps: [1, 2, 3].map(id => ({
         id, status: 'STOPPED', speedPct: 0, fault: false, runtimeH: 0, startTimer: 0, startCount: 0,
@@ -236,12 +259,19 @@
     const flowKgS = Math.max(flowM3h, 1) * CONST.WATER_RHO / 3600;
     return clamp((loadKW * 1000) / (flowKgS * CONST.WATER_CP), 0, 40);
   }
-  function processLoadKW(tSec, disturbanceActive, rng) {
-    const pos = tSec % CONST.LOAD_CYCLE_S;
+  // fixedLoadKW(선택): 생략(undefined)하면 기존과 완전히 동일한 저→중→고 3단
+  // 순환 부하를 쓴다. 숫자를 주면 그 값을 기저부하로 고정한다 — "고정 부하
+  // 모드"(관측/측정용, README "부하 프로파일 선택" 참조)에서만 쓰인다.
+  function processLoadKW(tSec, disturbanceActive, rng, fixedLoadKW) {
     let base;
-    if (pos < CONST.LOAD_CYCLE_S / 3) base = CONST.LOAD_LOW_KW;
-    else if (pos < (CONST.LOAD_CYCLE_S * 2) / 3) base = CONST.LOAD_MED_KW;
-    else base = CONST.LOAD_HIGH_KW;
+    if (typeof fixedLoadKW === 'number') {
+      base = fixedLoadKW;
+    } else {
+      const pos = tSec % CONST.LOAD_CYCLE_S;
+      if (pos < CONST.LOAD_CYCLE_S / 3) base = CONST.LOAD_LOW_KW;
+      else if (pos < (CONST.LOAD_CYCLE_S * 2) / 3) base = CONST.LOAD_MED_KW;
+      else base = CONST.LOAD_HIGH_KW;
+    }
     const extra = disturbanceActive ? CONST.DISTURBANCE_STEP_KW : 0;
     return Math.max(0, base + extra + gaussianRandom(rng) * CONST.LOAD_NOISE_STD_KW);
   }
@@ -336,6 +366,12 @@
   function applyDisturbance(state) {
     state.disturbanceTimer = CONST.DISTURBANCE_DURATION_S;
   }
+  // 유량측 외란(배관저항 급증/공급압력 저하 근사) — FLOW_DISTURBANCE_FACTOR/
+  // FLOW_DISTURBANCE_DURATION_S 주석 참조. 열부하 외란(applyDisturbance)과
+  // 별개 타이머로 관리해 두 외란을 동시에도, 따로도 걸 수 있게 한다.
+  function applyFlowDisturbance(state) {
+    state.flowDisturbanceTimer = CONST.FLOW_DISTURBANCE_DURATION_S;
+  }
 
   /* ---------------------------- 제어 로직 ---------------------------- */
   // CV(제어변수)에 실제로 적용되는 "진짜" 유효 상하한. invariants.js(anti-windup
@@ -349,6 +385,39 @@
   }
   function innerSpeedBounds(state) {
     return { min: state.hxProtectionActive ? 30 : 0, max: 100 };
+  }
+
+  // 단일루프 등가 게인 유도 — "같은 유효 이득, 다른 구조"로 비교하기 위함.
+  //
+  // 캐스케이드는 온도오차(°C)를 외부루프(oKp/oKi/oKd, 단위: (m3/h)/°C·s 계열)가
+  // 유량SP(m3/h)로 바꾸고, 그 유량오차(m3/h)를 내부루프(iKp/iKi/iKd, 단위: %/(m3/h)·s
+  // 계열)가 다시 속도(%)로 바꾸는 2단 구성이다. 단일루프는 온도오차(°C)에서 속도(%)를
+  // 곧바로 뽑아야 하므로, 두 루프 사이의 "m3/h → %" 변환을 대신해줄 계수가 필요하다.
+  //
+  // 그 변환계수로 iKp(%/(m3/h))만 쓸 수 있다 — 차원을 맞춰보면:
+  //   Kp_single = oKp[(m3/h)/°C]      × iKp[%/(m3/h)]   = %/°C       (필요한 P게인 차원과 일치)
+  //   Ki_single = oKi[(m3/h)/(°C·s)]  × iKp[%/(m3/h)]   = %/(°C·s)   (필요한 I게인 차원과 일치)
+  //   Kd_single = oKd[(m3/h·s)/°C]    × iKp[%/(m3/h)]   = %·s/°C     (필요한 D게인 차원과 일치)
+  // iKi(%/(m3/h·s))는 쓸 수 없다 — 이미 그 자체로 시간(1/s) 성분을 포함하고 있어서, 위
+  // 세 식 어디에 곱해도 나오는 차원이 P/I/D 어느 게인의 정의와도 맞지 않는다(예: oKp×iKi
+  // = %/(°C·s), 이건 I게인의 차원이지 P게인의 차원이 아니다). 즉 "적분·미분항도 같은
+  // 방식으로 유도"가 가능한 것은 iKp 하나뿐이고, 그 하나로 P/I/D 세 항을 전부 일관되게
+  // 변환할 수 있다 — 내부루프의 "즉각적인 비례 반응 정도"를 두 도메인 사이의 단일
+  // 환산비율로 보고, 외부루프가 만드는 P/I/D 성분 각각에 동일하게 적용하는 것이다.
+  //
+  // 주의: 이것은 정확한 폐루프 축소(reduction)가 아니라 "정적 이득(gain) 합성"에 의한
+  // 근사다 — 실제 캐스케이드는 내부루프 자체의 동특성(응답지연·자체 적분)을 갖고
+  // 있어서 두 PID를 곱으로 합치는 게 수학적으로 등가는 아니다. 여기서는 "같은 크기의
+  // 이득으로 단일 PID를 구성하면 구조 차이(내부 피드백 루프의 유무) 자체가 응답에
+  // 어떤 영향을 주는지"를 분리해서 보기 위한 근사 기준일 뿐, 단일루프를 별도로 최적
+  // 튜닝한 결과가 아니다(README "한계" 참조).
+  function singleLoopEquivalentGains(state) {
+    const conv = state.gains.iKp; // m3/h → % 환산계수로 쓸 수 있는 유일한 값(위 주석 참조)
+    return {
+      kp: state.gains.oKp * conv,
+      ki: state.gains.oKi * conv,
+      kd: state.gains.oKd * conv,
+    };
   }
 
   // measuredSupplyTempC/measuredFlowM3h: 센서 계층(sim-sensors.js)이 있을 때
@@ -371,10 +440,12 @@
     state.speedCmdPct = stepPID(state.innerPid, error, dtS, state.gains.iKp, state.gains.iKi, state.gains.iKd, b.min, b.max);
   }
   function singleLoopStep(state, dtS, measuredSupplyTempC) {
-    // 단일루프: 온도 오차로 펌프속도를 직접 산출 (캐스케이드 없이)
+    // 단일루프: 온도 오차로 펌프속도를 직접 산출 (캐스케이드 없이).
+    // 게인은 캐스케이드의 유효 이득과 같게 맞춘 값 — singleLoopEquivalentGains() 주석 참조.
     const supplyTempC = measuredSupplyTempC ?? state.supplyTempC;
     const error = supplyTempC - state.spTempC;
-    state.speedCmdPct = stepPID(state.innerPid, error, dtS, state.gains.oKp / 4, state.gains.oKi / 4, state.gains.oKd / 4, 0, 100);
+    const g = singleLoopEquivalentGains(state);
+    state.speedCmdPct = stepPID(state.innerPid, error, dtS, g.kp, g.ki, g.kd, 0, 100);
   }
 
   function stagingStep(state, dtS) {
@@ -412,7 +483,10 @@
   function stepShadowModels(state, shadow, dtInner, loadKW) {
     if (!shadow) return;
     const drive = (m, speedPct) => {
-      const flowTarget = CONST.DESIGN_FLOW_M3H * speedPct / 100;
+      // 유량측 외란은 실제 계통(tick())과 동일한 승수로 축소모델에도 반영한다 —
+      // 그래야 캐스케이드/단일루프 shadow가 같은 조건에서 정직하게 비교된다.
+      const flowFactor = state.flowDisturbanceTimer > 0 ? CONST.FLOW_DISTURBANCE_FACTOR : 1;
+      const flowTarget = CONST.DESIGN_FLOW_M3H * speedPct / 100 * flowFactor;
       m.flowM3h += (flowTarget - m.flowM3h) / 3 * dtInner;
       const dT = processDeltaTC(m.flowM3h, loadKW);
       const rTemp = m.tempC + dT;
@@ -430,10 +504,11 @@
     const speedC = stepPID(c.innerPid, errF, dtInner, state.gains.iKp, state.gains.iKi, state.gains.iKd, 0, 100);
     drive(c, speedC);
 
-    // 단일루프 shadow
+    // 단일루프 shadow — 게인은 singleLoopStep()과 동일하게 유도(singleLoopEquivalentGains() 참조)
     const s = shadow.single;
     const errS = s.tempC - state.spTempC;
-    const speedS = stepPID(s.pid, errS, dtInner, state.gains.oKp / 4, state.gains.oKi / 4, state.gains.oKd / 4, 0, 100);
+    const gs = singleLoopEquivalentGains(state);
+    const speedS = stepPID(s.pid, errS, dtInner, gs.kp, gs.ki, gs.kd, 0, 100);
     drive(s, speedS);
   }
 
@@ -512,10 +587,11 @@
     state.tickCount++;
 
     if (state.disturbanceTimer > 0) state.disturbanceTimer -= dtInner;
+    if (state.flowDisturbanceTimer > 0) state.flowDisturbanceTimer -= dtInner;
 
     const loadKW = (typeof loadKWOverride === 'number')
       ? loadKWOverride
-      : processLoadKW(state.simTimeS, state.disturbanceTimer > 0, rng);
+      : processLoadKW(state.simTimeS, state.disturbanceTimer > 0, rng, state.loadMode === 'FIXED' ? state.fixedLoadKW : undefined);
     state.lastLoadKW = loadKW;
 
     // --- 펌프 기동 TON 진행 ---
@@ -567,7 +643,11 @@
     });
 
     // --- 유량/차압 (단순 합산 근사) ---
-    state.flowTotalM3h = sumPumpFlows(state.pumps);
+    // 유량측 외란 중에는 같은 속도가 내는 유량이 FLOW_DISTURBANCE_FACTOR만큼
+    // 줄어든다(배관저항 급증/공급압력 저하 근사 — applyFlowDisturbance() 주석 참조).
+    // 이건 "펌프가 실제로 내는 유량"에 대한 외란이므로, 내부루프가 flowSpM3h와
+    // 비교하는 flowTotalM3h에 직접 반영돼야 내부루프가 이 외란을 감지하고 반응한다.
+    state.flowTotalM3h = sumPumpFlows(state.pumps) * (state.flowDisturbanceTimer > 0 ? CONST.FLOW_DISTURBANCE_FACTOR : 1);
     state.dpKPa = CONST.SYSTEM_RESISTANCE_R * state.flowTotalM3h * state.flowTotalM3h * CONST.KPA_PER_M_HEAD;
 
     // --- 열역학 ---
@@ -611,8 +691,8 @@
     stepPID,
     hxOutletTempC, processDeltaTC, processLoadKW, sumPumpFlows,
     eligibleStandby, startPump, stopPump, faultPump, clearFaultUI, setPumpFeedMode,
-    masterStart, masterStop, setControlMode, applyDisturbance,
-    outerFlowSpBounds, innerSpeedBounds,
+    masterStart, masterStop, setControlMode, applyDisturbance, applyFlowDisturbance,
+    outerFlowSpBounds, innerSpeedBounds, singleLoopEquivalentGains,
     outerLoopStep, innerLoopStep, singleLoopStep, stagingStep, interlocksStep,
     stepShadowModels,
     setAlarmActive, evaluateAlarms, ackAlarm, ackAllCritical,

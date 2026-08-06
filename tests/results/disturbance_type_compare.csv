@@ -1,0 +1,5 @@
+disturbanceKind,controlStructure,peakDeviationC,recoveryTimeS,invariantViolations
+LOAD,CASCADE,3.229,66.1,0
+LOAD,SINGLE,1.891,32.3,0
+FLOW,CASCADE,1.047,47,0
+FLOW,SINGLE,1.166,91.6,0

@@ -97,8 +97,8 @@ function runOneScenario(scn) {
   if (scn.name.startsWith('B_load_step') && scn.meta) {
     const sp = result.trendSeries[0].spTempC;
     const series = result.trendSeries.map(p => ({ t: p.t, v: p.supplyTempC }));
-    const upStep = metrics.analyzeDisturbanceRejection(series, scn.meta.stepUpAtS, sp);
-    const downStep = metrics.analyzeDisturbanceRejection(series, scn.meta.stepDownAtS, sp);
+    const upStep = metrics.analyzeDisturbanceRejection(series, scn.meta.stepUpAtS, sp, undefined, scn.meta.stepDownAtS);
+    const downStep = metrics.analyzeDisturbanceRejection(series, scn.meta.stepDownAtS, sp, undefined, scn.durationS);
     [{ label: '저→고 스텝', r: upStep }, { label: '고→저 스텝', r: downStep }].forEach(({ label, r }) => {
       if (r) stepResponseRows.push({
         scenario: scn.name, step: label, metric: 'disturbance_rejection',
@@ -135,8 +135,10 @@ for (const gset of scenarios.GAIN_SETS) {
   const staging = metrics.computeStagingToggles(result.runningCountSeries);
   const series = result.trendSeries.map(p => ({ t: p.t, v: p.supplyTempC }));
   const sp = result.trendSeries[0].spTempC;
-  const up = metrics.analyzeDisturbanceRejection(series, scn.meta.stepUpAtS, sp);
-  const down = metrics.analyzeDisturbanceRejection(series, scn.meta.stepDownAtS, sp);
+  // windowEndS: 각 스텝 응답은 "다음 스텝이 오기 전까지"만 보고 판정한다 —
+  // 안 그러면 상승스텝 복귀시간 계산에 하강스텝의 undershoot가 섞여 들어간다.
+  const up = metrics.analyzeDisturbanceRejection(series, scn.meta.stepUpAtS, sp, undefined, scn.meta.stepDownAtS);
+  const down = metrics.analyzeDisturbanceRejection(series, scn.meta.stepDownAtS, sp, undefined, scn.durationS);
   const violationCount = result.violations.length;
   gainSweepRows.push({
     gainSet: gset.name,
@@ -163,8 +165,8 @@ for (const structure of ['CASCADE', 'SINGLE']) {
   const staging = metrics.computeStagingToggles(result.runningCountSeries);
   const series = result.trendSeries.map(p => ({ t: p.t, v: p.supplyTempC }));
   const sp = result.trendSeries[0].spTempC;
-  const up = metrics.analyzeDisturbanceRejection(series, scn.meta.stepUpAtS, sp);
-  const down = metrics.analyzeDisturbanceRejection(series, scn.meta.stepDownAtS, sp);
+  const up = metrics.analyzeDisturbanceRejection(series, scn.meta.stepUpAtS, sp, undefined, scn.meta.stepDownAtS);
+  const down = metrics.analyzeDisturbanceRejection(series, scn.meta.stepDownAtS, sp, undefined, scn.durationS);
   const violationCount = result.violations.length;
   structureSweepRows.push({
     controlStructure: structure,
@@ -179,6 +181,35 @@ for (const structure of ['CASCADE', 'SINGLE']) {
   allViolations.push(...result.violations);
   console.log(`  [${structure}] 상승스텝 최대편차 ${up.peakDeviation.toFixed(2)}°C / 복귀 ${up.recoveryTimeS == null ? 'N/A' : up.recoveryTimeS.toFixed(1) + 's'}${violationCount ? ` ⚠위반${violationCount}건` : ''}`);
 }
+
+/* ---------------------------- 2c) 열부하 외란 vs 유량측 외란 (캐스케이드/단일루프 × 2) ----------------------------
+ * scenarioB(열부하, 외부루프 도메인)와 scenarioBFlow(유량, 내부루프 도메인)를
+ * 같은 구조 2종에 각각 걸어, "외란이 어느 도메인에서 들어오느냐"에 따라
+ * 캐스케이드/단일루프의 우열이 어떻게 달라지는지 직접 비교한다. */
+console.log('\n=== 2c/3 열부하 vs 유량측 외란 비교 (캐스케이드/단일루프) ===');
+const disturbanceCompareRows = [];
+for (const disturbanceKind of ['LOAD', 'FLOW']) {
+  for (const structure of ['CASCADE', 'SINGLE']) {
+    const makeScn = disturbanceKind === 'LOAD' ? scenarios.scenarioB : scenarios.scenarioBFlow;
+    const scn = makeScn({ name: `B_${disturbanceKind}_${structure}`, controlStructure: structure, seed: 2001 });
+    const result = runSimulation(scn);
+    const series = result.trendSeries.map(p => ({ t: p.t, v: p.supplyTempC }));
+    const sp = result.trendSeries[0].spTempC;
+    const stepAtS = scn.meta.stepUpAtS ?? scn.meta.disturbAtS;
+    const windowEndS = scn.meta.stepDownAtS ?? scn.durationS;
+    const r = metrics.analyzeDisturbanceRejection(series, stepAtS, sp, undefined, windowEndS);
+    const violationCount = result.violations.length;
+    disturbanceCompareRows.push({
+      disturbanceKind, controlStructure: structure,
+      peakDeviationC: +r.peakDeviation.toFixed(3),
+      recoveryTimeS: r.recoveryTimeS == null ? 'not_settled' : +r.recoveryTimeS.toFixed(1),
+      invariantViolations: violationCount,
+    });
+    allViolations.push(...result.violations);
+    console.log(`  [${disturbanceKind}/${structure}] 최대편차 ${r.peakDeviation.toFixed(2)}°C / 복귀 ${r.recoveryTimeS == null ? 'N/A' : r.recoveryTimeS.toFixed(1) + 's'}${violationCount ? ` ⚠위반${violationCount}건` : ''}`);
+  }
+}
+writeCSV('disturbance_type_compare.csv', disturbanceCompareRows);
 
 /* ---------------------------- 3) 확장 스위트: 전기/전력품질/센서/통신 ---------------------------- */
 console.log('\n=== 3/4 확장 스위트 (전기·전력품질·센서 계층, 시나리오 H/I/J) ===');
