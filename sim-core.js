@@ -338,6 +338,29 @@
     p.fault = false;
     p.status = state.masterOn ? 'STANDBY' : 'STOPPED';
   }
+  // ---- 수동 펌프 정지/기동 (운전원 조작) ----
+  // 우선순위 규칙: 수동 조작은 startPump()/stopPump()를 그대로 재사용하는
+  // "즉시 실행되는 1회성 명령"이다 — 자동 대수제어(stagingStep)를 잠그거나
+  // 우선순위를 별도로 두지 않는다. AUTO 모드에서는 대수제어가 이후에도 자기
+  // 임계값·지연시간(투입 전 15초, 해제 전 30초 유지)에 따라 계속 평가되므로,
+  // 수동으로 세운 펌프라도 시스템이 필요로 하면 그 지연시간 뒤에 자동으로
+  // 다시 투입될 수 있다 — 이건 실물 HMI의 수동 개입과 동일한 동작이다(수동은
+  // "지금 이 순간의 조작"이지, 자동 시퀀스를 영구히 막는 잠금이 아니다).
+  // 두 조작이 실제로 부딪히는 유일한 지점(이미 다른 펌프가 STARTING 중일 때
+  // 수동 기동을 또 시도하는 경우)은 startPump()의 anyPumpStarting 잠금이
+  // 자동 기동과 완전히 동일한 방식으로 막아준다 — 수동 전용 예외를 두지 않는다.
+  function manualStartPump(state, pumpId) {
+    if (!state.masterOn) return false; // 마스터 정지 중엔 개별 펌프만 따로 돌릴 수 없다
+    const p = state.pumps.find(pp => pp.id === pumpId);
+    if (!p || p.fault || p.status !== 'STANDBY') return false; // FAULT는 보호 리셋으로만, RUNNING/STARTING엔 무의미
+    return startPump(state, p);
+  }
+  function manualStopPump(state, pumpId) {
+    const p = state.pumps.find(pp => pp.id === pumpId);
+    if (!p || p.fault || p.status !== 'RUNNING') return false; // STARTING 중 중단은 다루지 않음(불필요한 예외 축소)
+    stopPump(state, p);
+    return true;
+  }
   // VFD 고장 → 바이패스(DOL) 절체, 또는 복구 → VFD로 되돌림.
   // 바이패스 중에는 속도 지령(speedCmdPct)을 받지 않고 BYPASS_FIXED_SPEED_PCT로
   // 고정 운전한다(tick()의 펌프 속도 램프 구간 참조) — 별도의 "나머지 펌프로
@@ -732,6 +755,7 @@
     stepPID,
     hxOutletTempC, processDeltaTC, processLoadKW, sumPumpFlows,
     eligibleStandby, startPump, stopPump, faultPump, clearFaultUI, setPumpFeedMode,
+    manualStartPump, manualStopPump,
     masterStart, masterStop, setControlMode, applyDisturbance, applyFlowDisturbance,
     outerFlowSpBounds, innerSpeedBounds, singleLoopEquivalentGains, dutyPumpCap,
     outerLoopStep, innerLoopStep, singleLoopStep, stagingStep, interlocksStep,

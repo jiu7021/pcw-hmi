@@ -169,6 +169,7 @@ table.alarms button{padding:2px 8px;font-size:10px;}
 
       <div class="panel">
         <h2>알람 (Alarms)</h2>
+        <div class="compare-note">ACK(Acknowledge)=운전원이 "이 알람을 봤다"고 확인하는 것. <b>이상 유무(Active/Cleared)</b>와 <b>확인 여부(Unacknowledged/Acknowledged)</b>는 서로 다른 축이다 — 이상이 이미 해소(Cleared)돼도 운전원이 확인(ACK)하기 전까지는 목록에 남는다. 잠깐 스쳐 지나간 이상을 놓치지 않고 반드시 한 번은 사람이 인지하게 하려는 것으로, 실물 SCADA/DCS 알람 관리의 표준적인 관행이다.</div>
         <div class="alarm-scroll">
         <table class="alarms">
           <thead><tr><th>우선순위</th><th>태그</th><th>내용</th><th>발생</th><th>해소</th><th>ACK</th></tr></thead>
@@ -184,9 +185,10 @@ table.alarms button{padding:2px 8px;font-size:10px;}
           <div class="item"><span class="k">총전류</span><span class="v mono" id="elecTotalI">-</span></div>
         </div>
         <table class="runtime-table">
-          <thead><tr><th>펌프</th><th>급전모드</th><th>전류(%FLA)</th><th>열보호</th><th>결상</th></tr></thead>
+          <thead><tr><th>펌프</th><th>급전모드</th><th>전류(%FLA)</th><th>열보호</th><th>결상</th><th>보호 리셋</th></tr></thead>
           <tbody id="elecPumpBody"></tbody>
         </table>
+        <div class="compare-note" id="protectResetStatus">고장(FAULT) 상태인 펌프만 리셋할 수 있다. 결상·과부하 트립은 그 원인(주입 상태)이 아직 살아있으면 리셋이 거부된다 — 트립 후 자동 복귀하지 않고 원인 해소 확인 뒤 수동 리셋을 요구하는 것이 의도된 설계다(원인 미해소 상태에서 리셋을 허용하면 재기동 즉시 다시 트립되거나 위험한 상태로 계속 운전될 수 있기 때문).</div>
         <div class="row" style="margin-top:8px">
           <button id="btnVfdFault1">P-1 VFD 고장(바이패스 절체)</button>
           <button id="btnPhaseLoss1">P-1 결상 주입</button>
@@ -336,9 +338,10 @@ table.alarms button{padding:2px 8px;font-size:10px;}
       <div class="panel">
         <h2>운전 정보</h2>
         <table class="runtime-table">
-          <thead><tr><th>펌프</th><th>상태</th><th>누적운전(h)</th></tr></thead>
+          <thead><tr><th>펌프</th><th>상태</th><th>누적운전(h)</th><th>수동 조작</th></tr></thead>
           <tbody id="runtimeBody"></tbody>
         </table>
+        <div class="compare-note">수동 정지/기동은 즉시 실행되는 1회성 명령이며, 자동 대수제어를 잠그지 않는다 — AUTO 모드에서는 대수제어가 이후에도 자기 임계값·지연시간(투입 전 15초/해제 전 30초 유지)에 따라 계속 평가되므로, 수동으로 세운 펌프라도 시스템이 필요로 하면 그 지연시간 뒤에 자동으로 다시 투입될 수 있다(실물 HMI의 수동 개입과 동일한 동작).
         <div class="measrow">
           <div class="item"><span class="k">투입 대수</span><span class="v mono" id="rtActive">-</span></div>
           <div class="item"><span class="k">총 유량</span><span class="v mono" id="rtFlow">-</span></div>
@@ -349,6 +352,7 @@ table.alarms button{padding:2px 8px;font-size:10px;}
 
       <div class="panel">
         <h2>센서 (참값 vs 측정값)</h2>
+        <div class="compare-note">측정값이 정상 범위 안에 있으면 알람이 발생하지 않는다. <b>임계 기반 진단(범위이탈·값고착·정합성 모순)으로는 검출되지 않는 열화가 존재함을 보여주는 것이 이 기능의 목적</b>이다 — 아래 열화 슬라이더를 올려보면, 참값과 측정값이 눈에 띄게 벌어져도 알람이 하나도 뜨지 않는 상태를 직접 관찰할 수 있다.</div>
         <div class="measrow">
           <div class="item"><span class="k">공급온도 참값</span><span class="v mono" id="sensTrueTemp">-</span></div>
           <div class="item"><span class="k">측정값</span><span class="v mono" id="sensMeasTemp">-</span></div>
@@ -722,9 +726,20 @@ function renderPanels() {
   setText(document.getElementById('rtSpare'), state.pumpPolicy === 'N_PLUS_1' ? (spareNames.join(', ') || '-') : '해당없음');
 
   const rtBody = document.getElementById('runtimeBody');
-  rtBody.innerHTML = state.pumps.map(p =>
-    `<tr><td>P-${p.id}</td><td>${p.fault ? 'FAULT' : p.status}</td><td>${p.runtimeH.toFixed(2)}</td></tr>`
-  ).join('');
+  rtBody.innerHTML = state.pumps.map(p => {
+    const canStart = state.masterOn && !p.fault && p.status === 'STANDBY';
+    const canStop = !p.fault && p.status === 'RUNNING';
+    return `<tr><td>P-${p.id}</td><td>${p.fault ? 'FAULT' : p.status}</td><td>${p.runtimeH.toFixed(2)}</td><td>
+      <button data-manual-stop="${p.id}" ${canStop ? '' : 'disabled'}>정지</button>
+      <button data-manual-start="${p.id}" ${canStart ? '' : 'disabled'}>기동</button>
+    </td></tr>`;
+  }).join('');
+  rtBody.querySelectorAll('button[data-manual-stop]').forEach(btn => {
+    btn.addEventListener('click', () => SimCore.manualStopPump(state, Number(btn.dataset.manualStop)));
+  });
+  rtBody.querySelectorAll('button[data-manual-start]').forEach(btn => {
+    btn.addEventListener('click', () => SimCore.manualStartPump(state, Number(btn.dataset.manualStart)));
+  });
 
   renderAlarms();
 }
@@ -770,7 +785,12 @@ function renderFaultPanel() {
     sw.addEventListener('click', () => {
       const id = Number(sw.dataset.faultId);
       const p = state.pumps.find(pp => pp.id === id);
-      if (p.fault) SimPlant.clearPumpFault(plant, id); else SimCore.faultPump(state, p);
+      if (p.fault) {
+        const r = SimPlant.clearPumpFault(plant, id);
+        setText(document.getElementById('protectResetStatus'), r.ok ? `P-${id} 보호 리셋 완료.` : `P-${id} 리셋 거부: ${r.reason}`);
+      } else {
+        SimCore.faultPump(state, p);
+      }
       renderFaultPanel();
     });
   });
@@ -783,14 +803,23 @@ function renderElectrical() {
   const body = document.getElementById('elecPumpBody');
   body.innerHTML = plant.elec.pumps.map((ep, i) => {
     const feedMode = state.pumps[i].feedMode;
+    const isFault = state.pumps[i].fault;
     return `<tr>
       <td>P-${ep.id}</td>
       <td>${feedMode === 'BYPASS' ? '<span class="alarm-active">BYPASS(DOL)</span>' : 'VFD'}</td>
       <td>${fmt(ep.currentPu * 100, 0)}%</td>
       <td>${fmt(ep.thermalState * 100, 0)}%${ep.tripReason === 'OVERLOAD' ? ' ⚠트립' : ''}</td>
       <td>${ep.phaseLossInjected ? (ep.tripReason === 'PHASE_LOSS' ? '트립' : '주입중') : '-'}</td>
+      <td><button data-protect-reset="${ep.id}" ${isFault ? '' : 'disabled'}>보호 리셋</button></td>
     </tr>`;
   }).join('');
+  body.querySelectorAll('button[data-protect-reset]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = Number(btn.dataset.protectReset);
+      const r = SimPlant.clearPumpFault(plant, id);
+      setText(document.getElementById('protectResetStatus'), r.ok ? `P-${id} 보호 리셋 완료.` : `P-${id} 리셋 거부: ${r.reason}`);
+    });
+  });
 }
 function renderPQ() {
   setText(document.getElementById('essStatus'), plant.pq.essActive ? 'ON (무효전력 주입 중)' : 'OFF');

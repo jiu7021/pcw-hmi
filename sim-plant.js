@@ -88,10 +88,34 @@
   }
 
   /* ---------------------------- 데모/테스트용 주입 헬퍼 ---------------------------- */
+  // 보호 리셋(트립 원인 미해소 시 거부). 반환값: { ok, reason }.
+  //
+  // 전기적으로 트립된 경우(tripReason이 있는 경우)에는 그 원인이 실제로
+  // 해소됐는지 먼저 확인한다 — 원인이 살아있는 채로 리셋만 풀어버리면
+  // (예: 결상이 여전히 걸려있는데 보호만 해제) 재기동 즉시 똑같이 재트립
+  // 되거나, 더 나쁘게는 원인이 해소되지 않은 위험한 상태로 계속 운전될
+  // 수 있다. 이 시뮬레이터가 다루는 트립 원인은 두 가지 주입 훅(결상,
+  // 기계적 과부하)뿐이므로 — 즉 이 모델의 "고장 원인"은 곧 이 두 플래그다
+  // — 그 두 가지만 확인하면 충분하다. 과부하(OVERLOAD) 트립 후에는 펌프가
+  // 이미 정지(전류 0)해 열적 상태가 시간에 따라 자연히 식으므로, 남은
+  // 위험 요인은 오직 "기계적 과부하 주입"이 아직 켜져 있는가뿐이다.
+  //
+  // 수동 고장 주입(고장 주입 패널, tripReason 없음)은 원래부터 "원인"이라는
+  // 개념이 없는 데모용 직접 조작이라 그대로 즉시 허용한다(기존 동작 유지).
   function clearPumpFault(plant, pumpId) {
     const pump = plant.core.pumps.find(p => p.id === pumpId);
-    if (pump) SimCore.clearFaultUI(plant.core, pump);
-    ElecLayer.resetPumpProtection(plant.elec, pumpId);
+    if (!pump) return { ok: false, reason: '펌프를 찾을 수 없습니다' };
+    if (!pump.fault) return { ok: false, reason: '이 펌프는 고장 상태가 아닙니다' };
+    const ep = plant.elec.pumps.find(p => p.id === pumpId);
+    if (ep && ep.tripReason === 'PHASE_LOSS' && ep.phaseLossInjected) {
+      return { ok: false, reason: '결상 원인이 아직 해소되지 않았습니다 — "결상 주입" 버튼으로 먼저 해제하세요' };
+    }
+    if (ep && ep.tripReason === 'OVERLOAD' && ep.mechanicalOverloadMult > 1) {
+      return { ok: false, reason: '기계적 과부하 원인이 아직 해소되지 않았습니다 — "기계적 과부하 주입" 버튼으로 먼저 해제하세요' };
+    }
+    SimCore.clearFaultUI(plant.core, pump);
+    if (ep) ElecLayer.resetPumpProtection(plant.elec, pumpId);
+    return { ok: true, reason: null };
   }
   function injectPhaseLoss(plant, pumpId, on) { ElecLayer.setPhaseLoss(plant.elec, pumpId, on); }
   function injectMechanicalOverload(plant, pumpId, mult) { ElecLayer.setMechanicalOverload(plant.elec, pumpId, mult); }
