@@ -73,6 +73,8 @@ function runSimulation(scenario) {
       supplyTempC: state.supplyTempC,
       spTempC: state.spTempC,
       flowTotalM3h: state.flowTotalM3h,
+      flowSpM3h: state.flowSpM3h,
+      outerIntegral: state.outerPid.integral,
       shadowCascadeC: shadow ? shadow.cascade.tempC : null,
       shadowSingleC: shadow ? shadow.single.tempC : null,
     });

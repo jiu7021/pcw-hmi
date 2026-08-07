@@ -2,7 +2,7 @@ scenario,pump,startCount,runtimeH
 A_normal_load_cycle,1,1,0.1659
 A_normal_load_cycle,2,1,0.1603
 A_normal_load_cycle,3,1,0.1561
-B_load_step,1,1,0.2492
+B_load_step,1,1,0.1547
 B_load_step,2,1,0.2436
 B_load_step,3,1,0.2394
 C_single_pump_fault_failover,1,1,0.0409

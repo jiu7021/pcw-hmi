@@ -187,10 +187,47 @@ function computeChangeoverSteadyStateError(trendSeries, changeoverAtS, spTempC, 
   return { tailAvgC: tailAvg, errorC: tailAvg - spTempC, tailWindowS };
 }
 
+/* ---- Anti-windup 효과 비교 (시나리오 G) ----
+ * fullSeries: [{t, supplyTempC, outerIntegral}] (runSimulation의 trendSeries 원본)
+ * overloadAtS~overloadEndS: 과부하(포화 유발) 구간. 그 구간에서 외부루프 적분항
+ * 최댓값을 구하고, 과부하가 끝나 부하가 정상으로 돌아온 뒤(overloadEndS 이후)
+ * "최대 언더슈트"(SP보다 얼마나 더 내려가는지)와 "±band 밴드 복귀시간"을 잰다.
+ * 복귀시간 판정은 analyzeDisturbanceRejection과 동일하게 "그 시점부터 관측
+ * 구간(windowEndS) 끝까지 계속 밴드 안에 머무는 첫 시점"을 쓴다(스텝 간격
+ * 오염을 피하려고 도입한 것과 같은 방식 — README "정착시간 판정 재검토" 참조).
+ */
+function analyzeAntiWindup(fullSeries, overloadAtS, overloadEndS, spTempC, band, windowEndS) {
+  band = band ?? 0.3;
+  const duringOverload = fullSeries.filter(p => p.t >= overloadAtS && p.t < overloadEndS);
+  const maxIntegralDuringOverload = duringOverload.length
+    ? Math.max(...duringOverload.map(p => p.outerIntegral))
+    : null;
+  const integralAtOverloadEnd = duringOverload.length
+    ? duringOverload[duringOverload.length - 1].outerIntegral
+    : null;
+
+  const after = fullSeries.filter(p => p.t >= overloadEndS && (windowEndS == null || p.t < windowEndS));
+  let minTempC = Infinity, minTempAtS = null;
+  after.forEach(p => {
+    if (p.supplyTempC < minTempC) { minTempC = p.supplyTempC; minTempAtS = p.t - overloadEndS; }
+  });
+  const peakUndershootC = after.length ? (spTempC - minTempC) : null; // 양수면 SP보다 아래로 벗어났다는 뜻
+
+  let recoveryTimeS = null;
+  for (let i = 0; i < after.length; i++) {
+    if (Math.abs(after[i].supplyTempC - spTempC) <= band) {
+      const staysIn = after.slice(i).every(p => Math.abs(p.supplyTempC - spTempC) <= band);
+      if (staysIn) { recoveryTimeS = after[i].t - overloadEndS; break; }
+    }
+  }
+  return { maxIntegralDuringOverload, integralAtOverloadEnd, minTempC, minTempAtS, peakUndershootC, recoveryTimeS, band };
+}
+
 module.exports = {
   computeStagingToggles,
   analyzeStepResponse,
   analyzeDisturbanceRejection,
+  analyzeAntiWindup,
   computePumpBalance,
   computeDriftBlindSpot,
   computeSagStats,

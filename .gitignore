@@ -9,7 +9,10 @@ Thumbs.db
 
 # Local env / secrets (this project has none, kept as a safety default)
 .env
-.env.local
+.env.*
+*.pem
+*.key
+secrets/
 
 # Machine-local Node.js PATH helper (points at a sandbox-specific install path)
 .node-path.sh

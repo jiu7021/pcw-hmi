@@ -1,4 +1,4 @@
 scenario,step,metric,peakDeviationC,recoveryTimeS,toleranceC,overshootPct,settleTimeS,steadyStateErrorC
-B_load_step,저→고 스텝,disturbance_rejection,3.229,66.1,0.3,,,
-B_load_step,고→저 스텝,disturbance_rejection,2.754,87.6,0.3,,,
-E_setpoint_step,SP step,setpoint_step,,,,25.94,119.5,0.004
+B_load_step,저→고 스텝,disturbance_rejection,3.343,92.7,0.3,,,
+B_load_step,고→저 스텝,disturbance_rejection,2.757,86.3,0.3,,,
+E_setpoint_step,SP step,setpoint_step,,,,25.89,119.2,0.004

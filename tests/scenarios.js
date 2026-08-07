@@ -147,6 +147,47 @@ function scenarioF() {
   };
 }
 
+/* G. Anti-windup 효과 비교 — 외부루프(유량 SP)를 확실하게, 오래 포화시킨 뒤
+ * 부하를 정상으로 되돌려 anti-windup ON/OFF의 차이를 본다.
+ *
+ * 과부하 크기(6000kW) 근거: 결정론적 부하(노이즈 제외)로 임계점을 스캔해보면
+ * 외부루프 CV(flowSpM3h)가 상한(660 m3/h)에 처음 닿기 시작하는 지점이 약
+ * 4200kW다. UI 부하슬라이더 상한(6000kW, README "부하 슬라이더 상한" 참조)과
+ * 맞춰, 임계점 대비 여유 있게 포화가 "확실히, 노이즈에 흔들리지 않고" 유지되는
+ * 수준으로 잡았다.
+ * 과부하 지속시간(300s) 근거: anti-windup OFF일 때 적분이 계속 불어나는
+ * 것을 보여주려면, ON일 때 적분이 포화 직후 곧바로 멈추는 것과 뚜렷이
+ * 대비될 만큼 충분히 길게 유지해야 한다. 이 시나리오의 지배적 시정수
+ * (HX_THERMAL_TAU_S=12s, 외부루프 주기 1s)의 수십 배 이상으로 잡아 과도응답이
+ * 아니라 "정상상태로 포화가 유지된 뒤"의 효과를 보도록 했다.
+ * 기준부하(2200kW=LOAD_MED_KW)·복귀 후 관측시간(600s) 근거: 기준부하는 다른
+ * 시나리오(scenarioBFlow)와 동일하게 "중부하"를 재사용해 별도로 새 대표값을
+ * 만들지 않았고, 관측시간은 사전 프로토타입 실행에서 ON/OFF 둘 다 밴드
+ * 복귀가 380s 이내에 끝나는 것을 확인한 뒤 여유를 더해 잡았다. */
+function scenarioAntiWindup(opts) {
+  opts = opts || {};
+  const baselineKW = LOAD_MED_KW;
+  const overloadKW = 6000;
+  const overloadAtS = 300; // 기준부하로 안정화할 시간(정착시간 대비 충분한 여유)
+  const overloadDurS = 300;
+  const returnAtS = overloadAtS + overloadDurS;
+  const durationS = opts.durationS ?? returnAtS + 600;
+  return {
+    name: opts.name || 'G_antiwindup_compare',
+    description: `Anti-windup 비교: 중부하(${baselineKW}kW) 안정화 → 과부하(${overloadKW}kW) ${overloadDurS}s → 중부하 복귀`,
+    durationS,
+    seed: opts.seed ?? 7001,
+    setup(state) {
+      state.antiWindupEnabled = opts.antiWindupEnabled ?? true;
+    },
+    events: [{ atS: 0, fn: (state) => SimCore.masterStart(state) }],
+    loadProfile(tSec) {
+      return (tSec >= overloadAtS && tSec < returnAtS) ? overloadKW : baselineKW;
+    },
+    meta: { baselineKW, overloadKW, overloadAtS, overloadDurS, returnAtS },
+  };
+}
+
 function allScenarios() {
   return [scenarioA(), scenarioB(), scenarioC(), scenarioD(), scenarioE(), scenarioF()];
 }
@@ -163,4 +204,4 @@ const GAIN_SETS = [
   { name: 'PID(D항 추가, Kd=20)', gains: { oKp: 40, oKi: 4, oKd: 20, iKp: 0.3, iKi: 0.15, iKd: 0 } },
 ];
 
-module.exports = { scenarioA, scenarioB, scenarioBFlow, scenarioC, scenarioD, scenarioE, scenarioF, allScenarios, GAIN_SETS };
+module.exports = { scenarioA, scenarioB, scenarioBFlow, scenarioC, scenarioD, scenarioE, scenarioF, scenarioAntiWindup, allScenarios, GAIN_SETS };

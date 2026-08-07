@@ -255,12 +255,26 @@ table.alarms button{padding:2px 8px;font-size:10px;}
             <button id="loadCycle" class="active">연속 순환(저→중→고)</button>
             <button id="loadFixed">고정 부하</button>
           </div>
+          <!-- 슬라이더 상한 6000kW 근거: 외부루프 CV(유량 SP) 포화가 결정론적으로
+               시작되는 부하는 약 4200kW(README "검증 결과" 참조). 예전 상한
+               5000kW는 그보다 크긴 하지만 노이즈에 따라 포화가 간헐적으로만
+               나타나 실습·시연용으로는 애매했다. 6000kW는 그 임계점보다 여유
+               있게 높여, 화면에서도 포화가 노이즈와 무관하게 확실히 관찰되도록
+               잡았다(tests/scenarios.js scenarioAntiWindup의 과부하값과 동일). -->
           <div id="fixedLoadRow" style="display:none">
-            <input type="range" id="fixedLoadInput" min="0" max="5000" step="100">
+            <input type="range" id="fixedLoadInput" min="0" max="6000" step="100">
             <span class="mono" id="fixedLoadVal">kW</span>
           </div>
         </div>
         <div class="compare-note">부하가 계속 순환하면 정상상태에 도달하지 못한 채 다음 단계로 넘어가버려, 외란에 대한 순수 응답을 측정하기 어렵다. <b>측정할 때는 "고정 부하"로 두고 안정된 상태에서 외란(위 두 버튼)만 걸 것을 권장한다.</b></div>
+        <div class="subhead">운전 대수 정책</div>
+        <div class="row">
+          <div class="toggle-group" style="width:220px">
+            <button id="policyAll" class="active">전대수 운전</button>
+            <button id="policyNPlus1">N+1 예비</button>
+          </div>
+        </div>
+        <div class="compare-note" id="policyNote">전대수: 펌프 3대 모두 대수제어 대상(기존 동작, 기본값). 외부루프 유량 SP 상한 = 3대 × 펌프 1대 최대유량.</div>
       </div>
 
       <div class="panel">
@@ -328,6 +342,8 @@ table.alarms button{padding:2px 8px;font-size:10px;}
         <div class="measrow">
           <div class="item"><span class="k">투입 대수</span><span class="v mono" id="rtActive">-</span></div>
           <div class="item"><span class="k">총 유량</span><span class="v mono" id="rtFlow">-</span></div>
+          <div class="item"><span class="k">운전 대수 정책</span><span class="v mono" id="rtPolicy">-</span></div>
+          <div class="item"><span class="k">예비 펌프</span><span class="v mono" id="rtSpare">-</span></div>
         </div>
       </div>
 
@@ -701,6 +717,9 @@ function renderPanels() {
   const activeCount = state.pumps.filter(p => p.status === 'RUNNING').length;
   setText(document.getElementById('rtActive'), activeCount + ' / 3');
   setText(document.getElementById('rtFlow'), fmt(state.flowTotalM3h, 0) + ' m³/h');
+  setText(document.getElementById('rtPolicy'), state.pumpPolicy === 'N_PLUS_1' ? 'N+1 예비' : '전대수 운전');
+  const spareNames = state.pumps.filter(p => p.status === 'STANDBY').map(p => 'P-' + p.id);
+  setText(document.getElementById('rtSpare'), state.pumpPolicy === 'N_PLUS_1' ? (spareNames.join(', ') || '-') : '해당없음');
 
   const rtBody = document.getElementById('runtimeBody');
   rtBody.innerHTML = state.pumps.map(p =>
@@ -858,6 +877,19 @@ function bindUI() {
     state.loadMode = 'FIXED';
     loadFixedBtn.classList.add('active'); loadCycleBtn.classList.remove('active');
     fixedLoadRow.style.display = 'inline-flex';
+  });
+
+  const policyAllBtn = document.getElementById('policyAll'), policyNPlus1Btn = document.getElementById('policyNPlus1');
+  const policyNote = document.getElementById('policyNote');
+  policyAllBtn.addEventListener('click', () => {
+    state.pumpPolicy = 'ALL';
+    policyAllBtn.classList.add('active'); policyNPlus1Btn.classList.remove('active');
+    policyNote.textContent = '전대수: 펌프 3대 모두 대수제어 대상(기존 동작, 기본값). 외부루프 유량 SP 상한 = 3대 × 펌프 1대 최대유량.';
+  });
+  policyNPlus1Btn.addEventListener('click', () => {
+    state.pumpPolicy = 'N_PLUS_1';
+    policyNPlus1Btn.classList.add('active'); policyAllBtn.classList.remove('active');
+    policyNote.textContent = 'N+1 예비: 2대만 대수제어 대상, 1대는 상시 예비(STANDBY). 듀티 펌프 고장 시 예비가 자동 투입되고, 고장 펌프가 복구되면 그 펌프가 새 예비로 남는다. 외부루프 유량 SP 상한 = 2대 × 펌프 1대 최대유량(전대수보다 낮음).';
   });
 
   const speedButtons = Array.from(document.querySelectorAll('#speedGroup button'));

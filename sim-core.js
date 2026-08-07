@@ -167,6 +167,8 @@
       masterOn: false,
       mode: 'AUTO', // AUTO | MANUAL
       controlStructure: 'CASCADE', // CASCADE | SINGLE
+      antiWindupEnabled: true, // 시험 전용 — stepPID() 주석 참조. 기본은 항상 true(켜짐).
+      pumpPolicy: 'ALL', // 'ALL'(전대수, 기본) | 'N_PLUS_1'(예비) — dutyPumpCap() 참조
       manualSpeedPct: 0,
       spTempC: CONST.SUPPLY_TEMP_SP_DEFAULT,
 
@@ -231,7 +233,13 @@
   // 막 진입하는 시점에 최소 1~2틱만큼 적분이 계속 불어나고서야 뒤늦게 멈추는
   // 지연이 생긴다(자동 검증 스위트의 anti-windup 불변조건 검사에서 실제로 발견돼
   // 수정한 문제 — tests/README 또는 README "검증 결과" 절 참조).
-  function stepPID(s, error, dt, kp, ki, kd, outMin, outMax) {
+  // antiWindupEnabled(선택, 기본 true): false를 주면 조건부 적분(anti-windup)을 끄고
+  // 포화 중에도 오차를 무조건 적분한다 — anti-windup의 효과를 정량적으로 비교하기
+  // 위한 시험 전용 옵션이다(README "검증 결과 — anti-windup 비교" 참조). 인자를
+  // 생략하면 항상 켜진 상태(anti-windup 적용)로 기존과 완전히 동일하게 동작한다 —
+  // 실제 화면(index.html)은 이 인자를 절대 넘기지 않으므로 기본 동작은 그대로다.
+  function stepPID(s, error, dt, kp, ki, kd, outMin, outMax, antiWindupEnabled) {
+    const awEnabled = antiWindupEnabled ?? true;
     const pTerm = kp * error;
     const dTerm = dt > 0 ? kd * (error - s.prevError) / dt : 0;
 
@@ -241,7 +249,7 @@
     const wouldExceedMax = tentativeOutput > outMax;
     const wouldExceedMin = tentativeOutput < outMin;
     const worseningDirection = (wouldExceedMax && error > 0) || (wouldExceedMin && error < 0);
-    if (!worseningDirection) s.integral = tentativeIntegral; // 포화를 심화시키지 않을 때만 실제 반영
+    if (!awEnabled || !worseningDirection) s.integral = tentativeIntegral; // 포화를 심화시키지 않을 때만 실제 반영(끄면 항상 반영)
 
     let output = pTerm + ki * s.integral + dTerm;
     output = clamp(output, outMin, outMax);
@@ -380,8 +388,28 @@
   // stepPID에 정확히 전달하는지 여부와 무관하게, 최종적으로 state.flowSpM3h /
   // state.speedCmdPct에 적용되는 참값을 나타낸다(추출 과정에서 로직을 바꾸지
   // 않기 위해 원본 index.html의 2차 clamp 수식을 그대로 옮겼다).
+  // 운전 대수 정책: 정상(무고장) 상태에서 대수제어가 듀티로 투입할 수 있는
+  // 최대 펌프 대수. 'ALL'(전대수)은 보유 펌프 전부(3대), 'N_PLUS_1'(예비)은
+  // 2대만 듀티로 쓰고 1대는 상시 예비로 남긴다. 고장 시 예비 자동투입
+  // (faultPump()의 eligibleStandby+startPump)은 이 상한과 무관하게 항상
+  // 작동한다 — 이 상한은 "고장 없는 정상 상태에서 대수제어가 스스로 몇 대까지
+  // 늘리는가"만 제한한다.
+  function dutyPumpCap(state) {
+    return state.pumpPolicy === 'N_PLUS_1' ? 2 : state.pumps.length;
+  }
+  // 외부루프 CV(유량 SP) 상한 산정 근거: 이 정책에서 정상적으로 듀티 투입될 수
+  // 있는 펌프 대수(dutyPumpCap) × 펌프 1대의 물리적 최대 유량(PUMP_RATED_FLOW_M3H,
+  // 속도 100%일 때) — 즉 "이 정책이 물리적으로 낼 수 있는 최대 유량 그 자체"다.
+  // 과거에는 CONST.DESIGN_FLOW_M3H(설계유량, 600)에 근거 없는 1.1배를 곱한
+  // 660이었는데(설계유량 자체도 펌프 3대 기준값이라 정책별 차이를 반영할 수
+  // 없었고, 1.1이라는 배수도 어디에도 설명이 없는 임의값이었다), 왜 그 값을
+  // 썼는지 코드 어디에도 근거가 없어서(이 프로젝트의 "근거 없는 상수 금지"
+  // 원칙 위반) 정책별 실제 펌프 물리 용량으로 다시 산정했다. 추가 여유(margin)를
+  // 두지 않은 이유: 이건 컨트롤러 튜닝값이 아니라 "이 대수로 물리적으로 낼 수
+  // 있는 최댓값"이라는 하드 리밋 그 자체이므로, 그 위에 또 다른 임의의 배수를
+  // 얹으면 똑같은 문제(근거 없는 값)가 반복될 뿐이다.
   function outerFlowSpBounds(state) {
-    return { min: CONST.MIN_FLOW_M3H * (state.hxProtectionActive ? 1 : 0.3), max: CONST.DESIGN_FLOW_M3H * 1.1 };
+    return { min: CONST.MIN_FLOW_M3H * (state.hxProtectionActive ? 1 : 0.3), max: dutyPumpCap(state) * CONST.PUMP_RATED_FLOW_M3H };
   }
   function innerSpeedBounds(state) {
     return { min: state.hxProtectionActive ? 30 : 0, max: 100 };
@@ -428,16 +456,25 @@
   function outerLoopStep(state, dtS, measuredSupplyTempC) {
     const supplyTempC = measuredSupplyTempC ?? state.supplyTempC;
     const error = supplyTempC - state.spTempC; // 온도가 높으면 유량을 늘려야 함
-    const out = stepPID(state.outerPid, error, dtS, state.gains.oKp, state.gains.oKi, state.gains.oKd,
-      0, CONST.DESIGN_FLOW_M3H * 1.1);
+    // stepPID에 넘기는 상하한은 반드시 outerFlowSpBounds()가 반환하는 "진짜"
+    // 유효 한계와 같아야 한다 — 예전엔 stepPID 호출부와 최종 clamp가 서로 다른
+    // 상수(고정 0~DESIGN_FLOW_M3H*1.1 vs outerFlowSpBounds())를 따로 썼는데,
+    // 우연히 둘 다 660으로 같아서 드러나지 않았을 뿐이었다. 상한이 운전 대수
+    // 정책에 따라 달라지게 되면서(dutyPumpCap 참조) 이 둘이 실제로 어긋날 수
+    // 있게 됐다 — 어긋나면 anti-windup 판정(stepPID 내부)이 실제 적용되는
+    // 한계가 아닌 엉뚱한 한계를 기준으로 포화 여부를 판단해, 예전에 이미 한 번
+    // 발견해 고쳤던 것과 같은 종류의 "한 틱 지연" 버그가 재발한다(README
+    // "검증 결과 — 발견된 문제" A-3 참조). 그래서 b를 먼저 구해 그대로 넘긴다.
     const b = outerFlowSpBounds(state);
+    const out = stepPID(state.outerPid, error, dtS, state.gains.oKp, state.gains.oKi, state.gains.oKd,
+      b.min, b.max, state.antiWindupEnabled);
     state.flowSpM3h = clamp(out, b.min, b.max);
   }
   function innerLoopStep(state, dtS, measuredFlowM3h) {
     const flowM3h = measuredFlowM3h ?? state.flowTotalM3h;
     const error = state.flowSpM3h - flowM3h;
     const b = innerSpeedBounds(state);
-    state.speedCmdPct = stepPID(state.innerPid, error, dtS, state.gains.iKp, state.gains.iKi, state.gains.iKd, b.min, b.max);
+    state.speedCmdPct = stepPID(state.innerPid, error, dtS, state.gains.iKp, state.gains.iKi, state.gains.iKd, b.min, b.max, state.antiWindupEnabled);
   }
   function singleLoopStep(state, dtS, measuredSupplyTempC) {
     // 단일루프: 온도 오차로 펌프속도를 직접 산출 (캐스케이드 없이).
@@ -445,7 +482,7 @@
     const supplyTempC = measuredSupplyTempC ?? state.supplyTempC;
     const error = supplyTempC - state.spTempC;
     const g = singleLoopEquivalentGains(state);
-    state.speedCmdPct = stepPID(state.innerPid, error, dtS, g.kp, g.ki, g.kd, 0, 100);
+    state.speedCmdPct = stepPID(state.innerPid, error, dtS, g.kp, g.ki, g.kd, 0, 100, state.antiWindupEnabled);
   }
 
   function stagingStep(state, dtS) {
@@ -454,8 +491,12 @@
 
     if (state.speedCmdPct >= CONST.STAGE_UP_SPEED_PCT) state.stageUpTimer += dtS; else state.stageUpTimer = 0;
     if (state.stageUpTimer >= CONST.STAGE_UP_DELAY_S) {
-      const spare = eligibleStandby(state);
-      if (spare && startPump(state, spare)) state.stageUpTimer = 0;
+      // dutyPumpCap: N+1 예비 정책에서는 정상 대수제어가 예비 펌프까지 듀티로
+      // 끌어오지 못하게 막는다 — 예비는 고장(faultPump)에서만 투입된다.
+      if (runningCount < dutyPumpCap(state)) {
+        const spare = eligibleStandby(state);
+        if (spare && startPump(state, spare)) state.stageUpTimer = 0;
+      }
     }
 
     if (state.speedCmdPct <= CONST.STAGE_DOWN_SPEED_PCT && runningCount > 1) state.stageDownTimer += dtS; else state.stageDownTimer = 0;
@@ -692,7 +733,7 @@
     hxOutletTempC, processDeltaTC, processLoadKW, sumPumpFlows,
     eligibleStandby, startPump, stopPump, faultPump, clearFaultUI, setPumpFeedMode,
     masterStart, masterStop, setControlMode, applyDisturbance, applyFlowDisturbance,
-    outerFlowSpBounds, innerSpeedBounds, singleLoopEquivalentGains,
+    outerFlowSpBounds, innerSpeedBounds, singleLoopEquivalentGains, dutyPumpCap,
     outerLoopStep, innerLoopStep, singleLoopStep, stagingStep, interlocksStep,
     stepShadowModels,
     setAlarmActive, evaluateAlarms, ackAlarm, ackAllCritical,

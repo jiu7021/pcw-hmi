@@ -211,6 +211,32 @@ for (const disturbanceKind of ['LOAD', 'FLOW']) {
 }
 writeCSV('disturbance_type_compare.csv', disturbanceCompareRows);
 
+/* ---------------------------- 2d) Anti-windup 비교 (ON vs OFF) ---------------------------- */
+console.log('\n=== 2d/3 Anti-windup 비교 (ON vs OFF) ===');
+const antiWindupRows = [];
+for (const awEnabled of [true, false]) {
+  const scn = scenarios.scenarioAntiWindup({ name: `G_antiwindup_${awEnabled ? 'ON' : 'OFF'}`, antiWindupEnabled: awEnabled, seed: 7001 });
+  const result = runSimulation(scn);
+  const sp = result.trendSeries[0].spTempC;
+  const r = metrics.analyzeAntiWindup(result.trendSeries, scn.meta.overloadAtS, scn.meta.returnAtS, sp, 0.3, scn.durationS);
+  const violationCount = result.violations.length;
+  antiWindupRows.push({
+    antiWindup: awEnabled ? 'ON' : 'OFF',
+    maxIntegralDuringOverload: +r.maxIntegralDuringOverload.toFixed(2),
+    peakUndershootC: +r.peakUndershootC.toFixed(3),
+    peakUndershootAtS: +r.minTempAtS.toFixed(1),
+    recoveryTimeS: r.recoveryTimeS == null ? 'not_settled' : +r.recoveryTimeS.toFixed(1),
+    invariantViolations: violationCount,
+  });
+  // OFF 실행은 anti-windup(INV5)을 일부러 끄고 위반을 재현하는 시험이므로, 그
+  // 위반을 전체 스위트의 allViolations(최종 PASS/FAIL 판정)에는 넣지 않는다 —
+  // 여기서 INV5가 걸리는 건 버그가 아니라 이 비교의 목적 그 자체다. ON 실행은
+  // 평소처럼(anti-windup 켜짐) 돌아가므로 위반이 나오면 진짜 회귀로 취급한다.
+  if (awEnabled) allViolations.push(...result.violations);
+  console.log(`  [${awEnabled ? 'ON' : 'OFF'}] 적분항 최댓값 ${r.maxIntegralDuringOverload.toFixed(1)} / 최대 언더슈트 ${r.peakUndershootC.toFixed(2)}°C / 복귀 ${r.recoveryTimeS == null ? 'N/A' : r.recoveryTimeS.toFixed(1) + 's'}${violationCount ? ` (참고: INV5 위반 ${violationCount}건 — 의도된 것)` : ''}`);
+}
+writeCSV('antiwindup_compare.csv', antiWindupRows);
+
 /* ---------------------------- 3) 확장 스위트: 전기/전력품질/센서/통신 ---------------------------- */
 console.log('\n=== 3/4 확장 스위트 (전기·전력품질·센서 계층, 시나리오 H/I/J) ===');
 const extendedInvariantIds = allInvariantIds.concat(['INV7_CV_BOUNDED_UNDER_SENSOR_FAULT', 'INV8_VOLTAGE_FLOOR_NORMAL_OPS']);
