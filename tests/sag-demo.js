@@ -17,53 +17,59 @@
 const ElecLayer = require('../sim-electrical.js');
 const PQLayer = require('../sim-power-quality.js');
 
-function runInterlockBypassDemo() {
+// 두 케이스 모두 실제 오케스트레이터(sim-plant.js)와 동일하게 ElecLayer.updateFast
+// + PQLayer.updateSubstep 조합(5ms 해상도)을 쓴다 — 100ms에 한 번만 계산하면
+// 그 첫 100ms 안의 최저점(돌입 순간에 가장 가까운 값)을 놓친다(README "검증
+// 결과 — 전기 계층 고속화" 참조). 이 데모는 바로 그 최저점을 증거로 쓰므로,
+// 실제 앱과 다른(더 낙관적인) 해상도로 계산하면 근거로서 부정확해진다.
+function runCase(pumps, ticks) {
+  const es = ElecLayer.createElecState();
+  const pq = PQLayer.createPQState();
   const dt = 0.1;
+  let t = 0;
+  let minV = 1.0, essOnV = null;
+  for (let i = 0; i < ticks; i++) {
+    const prevStartTimers = pumps.map(p => p.startTimer);
+    t += dt;
+    pumps.forEach(p => { if (p.status === 'STARTING') p.startTimer = t; });
+    const { samples } = ElecLayer.updateFast(es, pumps, prevStartTimers, dt);
+    const tStart = t - dt;
+    samples.forEach(s => {
+      PQLayer.updateSubstep(pq, s.busVoltagePu, tStart + s.tOffsetS, () => PQLayer.classifyCause(es));
+      if (s.busVoltagePu < minV) minV = s.busVoltagePu;
+      if (pq.essActive && essOnV === null) essOnV = pq.fastVoltagePu;
+    });
+  }
+  return { minV, essOnV };
+}
 
+function runInterlockBypassDemo() {
   // 케이스 A(정상): VFD 2대 정격운전 중 1대가 바이패스(DOL)로 정상적으로
   // (인터록 지켜) 기동 — 예: 그 1대만 VFD 고장으로 바이패스 절체된 상황.
-  const esA = ElecLayer.createElecState();
-  const pqA = PQLayer.createPQState();
-  let tA = 0;
   const pumpsA = [
     { id: 1, status: 'STARTING', speedPct: 0, fault: false, startTimer: 0, feedMode: 'BYPASS' },
     { id: 2, status: 'RUNNING', speedPct: 100, fault: false, startTimer: 0, feedMode: 'VFD' },
     { id: 3, status: 'RUNNING', speedPct: 100, fault: false, startTimer: 0, feedMode: 'VFD' },
   ];
-  let minVA = 1.0;
-  for (let i = 0; i < 50; i++) {
-    tA += dt; pumpsA[0].startTimer = tA;
-    ElecLayer.update(esA, pumpsA, dt);
-    PQLayer.update(pqA, esA, tA, dt);
-    if (esA.busVoltagePu < minVA) minVA = esA.busVoltagePu;
-  }
+  const { minV: minVA } = runCase(pumpsA, 50);
 
   // 케이스 B(인터록 우회 가정): VFD 1대 운전 중 나머지 2대가 "동시에"
   // 바이패스(DOL)로 STARTING — 예: 2대가 동시에 VFD 고장이 나서 동시에
   // 절체를 시도하는 상황. (실제 앱에서는 startPump()의 anyPumpStarting
   // 잠금 때문에 이 상태 자체가 만들어질 수 없다 — 여기서는 그 잠금을
   // 거치지 않고 직접 pump 배열을 구성해 "막지 않았다면 어떻게 되는가"를 본다.)
-  const esB = ElecLayer.createElecState();
-  const pqB = PQLayer.createPQState();
-  let tB = 0;
   const pumpsB = [
     { id: 1, status: 'STARTING', speedPct: 0, fault: false, startTimer: 0, feedMode: 'BYPASS' },
     { id: 2, status: 'STARTING', speedPct: 0, fault: false, startTimer: 0, feedMode: 'BYPASS' },
     { id: 3, status: 'RUNNING', speedPct: 100, fault: false, startTimer: 0, feedMode: 'VFD' },
   ];
-  let minVB = 1.0;
-  for (let i = 0; i < 50; i++) {
-    tB += dt; pumpsB[0].startTimer = tB; pumpsB[1].startTimer = tB;
-    ElecLayer.update(esB, pumpsB, dt);
-    PQLayer.update(pqB, esB, tB, dt);
-    if (esB.busVoltagePu < minVB) minVB = esB.busVoltagePu;
-  }
+  const { minV: minVB, essOnV: essOnVB } = runCase(pumpsB, 50);
 
   const floor = PQLayer.CONST.VOLTAGE_MANAGEMENT_FLOOR_PU;
   return {
     floorPct: floor * 100,
     normalCase: { minVoltagePct: minVA * 100, breachesFloor: minVA < floor },
-    bypassCase: { minVoltagePct: minVB * 100, breachesFloor: minVB < floor },
+    bypassCase: { minVoltagePct: minVB * 100, breachesFloor: minVB < floor, essEngagedAtPct: essOnVB !== null ? essOnVB * 100 : null },
     demonstratesInterlockNecessity: (minVA >= floor) && (minVB < floor),
   };
 }

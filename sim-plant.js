@@ -57,18 +57,30 @@
     SensorLayer.updateAll(plant.sensors, trueValues, dtInner, rng);
     const measured = SensorLayer.readMeasured(plant.sensors);
 
+    // 이번 제어틱 "시작 시점"의 startTimer 스냅샷 — 전기 계층 고속 서브스텝이
+    // 이 틱 동안 STARTING 펌프의 startTimer를 선형보간하는 시작점으로 쓴다
+    // (ElecLayer.updateFast() 주석 참조). SimCore.tick() 호출 *전에* 떠야 한다.
+    const prevStartTimers = state.pumps.map(p => p.startTimer);
+
     // 2) 제어 로직 + 플랜트 물리 — 센서 측정값을 제어입력으로 사용(참값 접근 없음)
     SimCore.tick(state, plant.shadow, rng, loadKWOverride, measured);
 
-    // 3) 전기 계층: 이번 틱에 갱신된 펌프 상태/속도로 전동기 전류·모선전압 계산
-    const newTrips = ElecLayer.update(plant.elec, state.pumps, dtInner);
+    // 3) 전기 계층: 100ms를 FAST_SAMPLE_MS(5ms) 간격으로 쪼개 돌입전류 지수감쇠를
+    //    촘촘히 반영한다(과거엔 100ms에 한 번만 계산해, 그 첫 100ms 안의 최저점을
+    //    놓쳤다 — README "검증 결과 — 전기 계층 고속화" 참조).
+    const { newTrips, samples: elecSamples } = ElecLayer.updateFast(plant.elec, state.pumps, prevStartTimers, dtInner);
     newTrips.forEach(({ id }) => {
       const pump = state.pumps.find(p => p.id === id);
       if (pump && !pump.fault) SimCore.faultPump(state, pump); // 기존 고장/절체 경로 재사용
     });
 
-    // 4) 전력품질 계층: 모선전압 고속 샘플링 + sag 검출/원인분류/ESS 대응
-    const substeps = PQLayer.update(plant.pq, plant.elec, state.simTimeS, dtInner);
+    // 4) 전력품질 계층: 위 전기 계층의 서브스텝 하나하나를 그대로 목표전압으로
+    //    받아 같은 해상도(5ms)로 sag 검출/원인분류/ESS 대응을 진행한다 — 더
+    //    이상 "100ms 동안 고정된 목표치를 쫓아가기만" 하지 않는다.
+    const tStart = state.simTimeS - dtInner;
+    const substeps = elecSamples.map(s =>
+      PQLayer.updateSubstep(plant.pq, s.busVoltagePu, tStart + s.tOffsetS, () => PQLayer.classifyCause(plant.elec))
+    );
     SimCore.setAlarmActive(state, 'VOLTAGE_SAG', plant.pq.sagActive, 'High',
       plant.pq.currentEvent
         ? `순간전압강하 진행중 (최저 ${(plant.pq.currentEvent.minVoltagePu * 100).toFixed(0)}%, 원인:${plant.pq.currentEvent.cause})`

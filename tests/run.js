@@ -301,7 +301,7 @@ for (const scn of plantScenarios.allPlantScenarios()) {
 console.log('\n  [동시기동 인터록 우회 데모 — 정식 시나리오 아님, 상수 근거 실증용]');
 const bypassDemo = runInterlockBypassDemo();
 console.log(`    정상(1대 기동): 최저전압 ${bypassDemo.normalCase.minVoltagePct.toFixed(1)}% (관리한계 ${bypassDemo.floorPct}% ${bypassDemo.normalCase.breachesFloor ? '위반' : '준수'})`);
-console.log(`    우회(2대 동시기동): 최저전압 ${bypassDemo.bypassCase.minVoltagePct.toFixed(1)}% (관리한계 ${bypassDemo.floorPct}% ${bypassDemo.bypassCase.breachesFloor ? '위반' : '준수'})`);
+console.log(`    우회(2대 동시기동): 최저전압 ${bypassDemo.bypassCase.minVoltagePct.toFixed(1)}% (관리한계 ${bypassDemo.floorPct}% ${bypassDemo.bypassCase.breachesFloor ? '위반' : '준수'}), ESS 투입 시점 전압 ${bypassDemo.bypassCase.essEngagedAtPct == null ? 'N/A' : bypassDemo.bypassCase.essEngagedAtPct.toFixed(1) + '%'}`);
 console.log(`    → 인터록의 필요성이 수치로 증명됨: ${bypassDemo.demonstratesInterlockNecessity}`);
 
 /* ---------------------------- 4) CSV 저장 ---------------------------- */
@@ -317,7 +317,7 @@ writeCSV('drift_blind_spot.csv', driftBlindSpotRows);
 writeCSV('bypass_changeover.csv', changeoverRows);
 writeCSV('interlock_bypass_demo.csv', [
   { case: 'normal_single_start', minVoltagePct: +bypassDemo.normalCase.minVoltagePct.toFixed(2), floorPct: bypassDemo.floorPct, breachesFloor: bypassDemo.normalCase.breachesFloor },
-  { case: 'bypass_simultaneous_start', minVoltagePct: +bypassDemo.bypassCase.minVoltagePct.toFixed(2), floorPct: bypassDemo.floorPct, breachesFloor: bypassDemo.bypassCase.breachesFloor },
+  { case: 'bypass_simultaneous_start', minVoltagePct: +bypassDemo.bypassCase.minVoltagePct.toFixed(2), floorPct: bypassDemo.floorPct, breachesFloor: bypassDemo.bypassCase.breachesFloor, essEngagedAtPct: bypassDemo.bypassCase.essEngagedAtPct == null ? null : +bypassDemo.bypassCase.essEngagedAtPct.toFixed(2) },
 ]);
 // 위반이 없어도 항상 갱신한다 — 그렇지 않으면 과거 실패 실행의 잔재 파일이
 // 남아 "지금도 실패 중"인 것처럼 보이는 오해를 일으킨다.
