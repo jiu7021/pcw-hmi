@@ -1,6 +1,17 @@
 /* =============================================================================
  * tests/metrics.js — 위반은 아니지만 측정해서 기록하는 성능 지표
+ *
+ * UMD: Node(require)와 브라우저(<script>) 양쪽에서 로드된다 — 이유는
+ * tests/runner.js 상단 주석 참조. 본문은 변환 전과 한 글자도 다르지 않다.
  * ========================================================================= */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) {
+    module.exports = factory();
+  } else {
+    root.SimTestMetrics = factory();
+  }
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+'use strict';
 
 /* ---- 대수제어 토글 횟수 (헌팅 판정 기준 포함) ----
  * runningCountSeries: [{t, runningCount}]
@@ -223,7 +234,7 @@ function analyzeAntiWindup(fullSeries, overloadAtS, overloadEndS, spTempC, band,
   return { maxIntegralDuringOverload, integralAtOverloadEnd, minTempC, minTempAtS, peakUndershootC, recoveryTimeS, band };
 }
 
-module.exports = {
+return {
   computeStagingToggles,
   analyzeStepResponse,
   analyzeDisturbanceRejection,
@@ -235,3 +246,4 @@ module.exports = {
   THEORETICAL_MAX_TOGGLES_PER_MIN,
   HUNTING_WARN_THRESHOLD_PER_MIN,
 };
+});

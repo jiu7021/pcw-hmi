@@ -1,7 +1,18 @@
 /* =============================================================================
  * tests/scenarios.js — 시나리오 A~F 정의 + 게인 배치 시험용 게인 세트
+ *
+ * UMD: Node(require)와 브라우저(<script>) 양쪽에서 로드된다 — 이유는
+ * tests/runner.js 상단 주석 참조. 본문은 변환 전과 한 글자도 다르지 않다.
  * ========================================================================= */
-const SimCore = require('../sim-core.js');
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) {
+    module.exports = factory(require('../sim-core.js'));
+  } else {
+    root.SimTestScenarios = factory(root.SimCore);
+  }
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (SimCore) {
+'use strict';
+
 const { LOAD_LOW_KW, LOAD_MED_KW, LOAD_HIGH_KW } = SimCore.CONST;
 
 /* A. 정상 부하 사이클 — 내장 3단(저/중/고) 순환 부하를 손대지 않고 그대로 사용.
@@ -204,4 +215,5 @@ const GAIN_SETS = [
   { name: 'PID(D항 추가, Kd=20)', gains: { oKp: 40, oKi: 4, oKd: 20, iKp: 0.3, iKi: 0.15, iKd: 0 } },
 ];
 
-module.exports = { scenarioA, scenarioB, scenarioBFlow, scenarioC, scenarioD, scenarioE, scenarioF, scenarioAntiWindup, allScenarios, GAIN_SETS };
+return { scenarioA, scenarioB, scenarioBFlow, scenarioC, scenarioD, scenarioE, scenarioF, scenarioAntiWindup, allScenarios, GAIN_SETS };
+});

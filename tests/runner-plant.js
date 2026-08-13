@@ -2,11 +2,24 @@
  * tests/runner-plant.js — sim-plant.js(전기/전력품질/센서 포함 전 계층)를
  * 돌리는 헤드리스 러너. tests/runner.js(기존 6종, SimCore만 사용)와는 별개로
  * 둬서 기존 회귀 검증 경로를 절대 건드리지 않는다.
+ *
+ * UMD: Node(require)와 브라우저(<script>) 양쪽에서 로드된다 — 이유는
+ * tests/runner.js 상단 주석 참조. 본문은 변환 전과 한 글자도 다르지 않다.
  * ========================================================================= */
-const SimCore = require('../sim-core.js');
-const SimPlant = require('../sim-plant.js');
-const { createExtendedInvariants } = require('./invariants.js');
-const { dumpState } = require('./runner.js');
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) {
+    module.exports = factory(
+      require('../sim-core.js'), require('../sim-plant.js'),
+      require('./invariants.js'), require('./runner.js')
+    );
+  } else {
+    root.SimTestRunnerPlant = factory(root.SimCore, root.SimPlant, root.SimTestInvariants, root.SimTestRunner);
+  }
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (SimCore, SimPlant, SimTestInvariants, SimTestRunner) {
+'use strict';
+
+const { createExtendedInvariants } = SimTestInvariants;
+const { dumpState } = SimTestRunner;
 
 // scenario = {
 //   name, description, durationS, seed,
@@ -69,4 +82,5 @@ function runPlantSimulation(scenario) {
   return { plant, state, violations, driftSeries };
 }
 
-module.exports = { runPlantSimulation };
+return { runPlantSimulation };
+});

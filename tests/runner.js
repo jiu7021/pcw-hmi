@@ -1,8 +1,29 @@
 /* =============================================================================
  * tests/runner.js — 시나리오 서술을 받아 헤드리스로 시뮬레이션을 돌리는 공용 러너
+ *
+ * ---- UMD로 바꾼 이유 (tests/ 전 모듈 공통) ----
+ * 화면(index.html)의 "학습 모드"가 결과 해석에 띄우는 수치는 반드시 검증
+ * 스위트가 계산한 값과 같은 코드 경로에서 나와야 한다 — 표시용으로 러너나
+ * 지표 계산을 따로 구현하면 두 값이 서로 갈라져서, "기본 파라미터로 돌리면
+ * 화면 값과 tests/results/*.csv 값이 일치한다"는 보장이 깨진다. 그런데 기존
+ * CommonJS(require)는 브라우저에서 로드할 수 없어서, sim-plant.js가 이미 쓰고
+ * 있는 것과 동일한 의존성 주입 UMD 형태로 통일했다.
+ *
+ * 본문 들여쓰기를 factory 안으로 밀어넣지 않은 것은 의도적이다 — 전체를 한 단계
+ * 들여쓰면 파일의 모든 줄이 diff에 잡혀서 "로직은 하나도 안 바뀌었다"를 눈으로
+ * 확인할 수 없게 된다. 여기서 바뀐 것은 헤더/푸터뿐이고, Node 경로(require)의
+ * 동작은 변환 전과 완전히 동일하다(CSV 12종 diff 0으로 확인).
  * ========================================================================= */
-const SimCore = require('../sim-core.js');
-const { createAllInvariants } = require('./invariants.js');
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) {
+    module.exports = factory(require('../sim-core.js'), require('./invariants.js'));
+  } else {
+    root.SimTestRunner = factory(root.SimCore, root.SimTestInvariants);
+  }
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (SimCore, SimTestInvariants) {
+'use strict';
+
+const { createAllInvariants } = SimTestInvariants;
 
 function dumpState(state) {
   return {
@@ -83,4 +104,5 @@ function runSimulation(scenario) {
   return { state, shadow, violations, runningCountSeries, trendSeries };
 }
 
-module.exports = { runSimulation, dumpState };
+return { runSimulation, dumpState };
+});

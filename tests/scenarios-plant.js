@@ -1,9 +1,19 @@
 /* =============================================================================
  * tests/scenarios-plant.js — 전기/전력품질/센서 계층을 포함하는 시나리오
  * H(센서고착), I(센서 드리프트 장시간), J(VFD 고장→바이패스 절체)
+ *
+ * UMD: Node(require)와 브라우저(<script>) 양쪽에서 로드된다 — 이유는
+ * tests/runner.js 상단 주석 참조. 본문은 변환 전과 한 글자도 다르지 않다.
  * ========================================================================= */
-const SimCore = require('../sim-core.js');
-const SimPlant = require('../sim-plant.js');
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) {
+    module.exports = factory(require('../sim-core.js'), require('../sim-plant.js'));
+  } else {
+    root.SimTestScenariosPlant = factory(root.SimCore, root.SimPlant);
+  }
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (SimCore, SimPlant) {
+'use strict';
+
 const { LOAD_MED_KW } = SimCore.CONST;
 
 /* H. 공급온도 센서 고착(SP 근처 값에) — 제어기가 "이미 도달했다"고 착각하는 동안
@@ -66,4 +76,5 @@ function allPlantScenarios() {
   return [scenarioH(), scenarioI(), scenarioJ()];
 }
 
-module.exports = { scenarioH, scenarioI, scenarioJ, allPlantScenarios };
+return { scenarioH, scenarioI, scenarioJ, allPlantScenarios };
+});

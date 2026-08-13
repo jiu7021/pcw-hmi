@@ -13,9 +13,18 @@
  * 것이 sim-electrical.js의 핵심 전제이기 때문에, "왜 동시 기동을 막아야
  * 하는가"를 증명하려면 정확히 그 문제가 실제로 발생하는 조건(VFD 고장 시
  * 상용전원 직입 상태에서 두 대가 겹치는 경우)을 재현해야 의미가 있다.
+ *
+ * UMD: Node(require)와 브라우저(<script>) 양쪽에서 로드된다 — 이유는
+ * tests/runner.js 상단 주석 참조. 본문은 변환 전과 한 글자도 다르지 않다.
  * ========================================================================= */
-const ElecLayer = require('../sim-electrical.js');
-const PQLayer = require('../sim-power-quality.js');
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) {
+    module.exports = factory(require('../sim-electrical.js'), require('../sim-power-quality.js'));
+  } else {
+    root.SimTestSagDemo = factory(root.ElecLayer, root.PQLayer);
+  }
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (ElecLayer, PQLayer) {
+'use strict';
 
 // 두 케이스 모두 실제 오케스트레이터(sim-plant.js)와 동일하게 ElecLayer.updateFast
 // + PQLayer.updateSubstep 조합(5ms 해상도)을 쓴다 — 100ms에 한 번만 계산하면
@@ -74,4 +83,9 @@ function runInterlockBypassDemo() {
   };
 }
 
-module.exports = { runInterlockBypassDemo };
+// runCase는 원래 이 파일 내부 전용이었으나, 화면(학습 모드 "인터록" 탭)이
+// "동시 기동 대수·급전모드를 사용자가 바꿔가며" 같은 계산을 돌릴 수 있도록
+// 함께 내보낸다. runInterlockBypassDemo()가 쓰는 고정 2케이스는 그대로 두므로
+// 검증 스위트(run.js)의 결과는 전혀 달라지지 않는다.
+return { runInterlockBypassDemo, runCase };
+});

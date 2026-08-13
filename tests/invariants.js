@@ -10,8 +10,19 @@
  * 아니라, "블랙박스로 관측 가능한 계약(contract)"을 독립적으로 다시 계산해서
  * 대조하는 방식을 우선한다. 그래야 sim-core.js 쪽 로직에 버그가 있어도
  * 테스트가 같은 실수를 반복하지 않는다.
+ *
+ * UMD: Node(require)와 브라우저(<script>) 양쪽에서 로드된다 — 이유는
+ * tests/runner.js 상단 주석 참조. 본문은 변환 전과 한 글자도 다르지 않다.
  * ========================================================================= */
-const SimCore = require('../sim-core.js');
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) {
+    module.exports = factory(require('../sim-core.js'));
+  } else {
+    root.SimTestInvariants = factory(root.SimCore);
+  }
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (SimCore) {
+'use strict';
+
 const { CONST } = SimCore;
 
 const EPS = 1e-6; // clamp()가 만드는 상하한 값은 부동소수점 상 정확히 일치하는 게
@@ -237,7 +248,7 @@ function createExtendedInvariants(dtInnerS) {
   ]);
 }
 
-module.exports = {
+return {
   createAllInvariants,
   createExtendedInvariants,
   MIN_RETRIGGER_S,
@@ -250,3 +261,4 @@ module.exports = {
   createInvariant7_CVBoundedUnderSensorFault,
   createInvariant8_VoltageFloorUnderNormalOps,
 };
+});
