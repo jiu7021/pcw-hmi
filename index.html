@@ -161,9 +161,16 @@ table.alarms button{padding:2px 8px;font-size:10px;}
      통일한다 — 데이터가 아니라 참조선이기 때문이다.
      상태색 3색(정상 녹 / 경보 황 / 트립 적)과는 다른 색상군이라 상태 표시와
      혼동되지 않는다. */
-  --hmi-a-strong:#06b6d4; --hmi-a-soft:#a5f3fc;
-  --hmi-b-strong:#f97316; --hmi-b-soft:#fdba74;
-  --hmi-trace-ref:#8b97a8;
+  /* 그래프 팔레트 — 이 6색만 쓴다. 명도 차이(진한/옅은)로 구분하던 방식은
+     화면에서 실제로 구분이 안 돼서 버렸다. 시리즈마다 색상 자체가 다르다.
+       시안 A안 주 지표 / 연두 A안 보조 지표
+       주황 B안 주 지표 / 자홍 B안 보조 지표
+       흰색 중립(A·B 공통) / 회색 기준선(항상 점선)
+     선 스타일도 함께 쓴다: A안=실선, B안=파선. 주 3px, 보조 2px, 기준선 1.5px.
+     명도만 다른 두 색을 같은 차트에 올리지 않는다. */
+  --hmi-a-main:#22d3ee; --hmi-a-sub:#a3e635;
+  --hmi-b-main:#fb923c; --hmi-b-sub:#e879f9;
+  --hmi-trace-neutral:#e5e7eb; --hmi-trace-ref:#6b7280;
 }
 .hmi-hidden{display:none !important;}
 
