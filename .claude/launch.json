@@ -4,8 +4,8 @@
     {
       "name": "pcw-hmi",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8770"],
-      "port": 8770
+      "runtimeArgs": [".claude/devserver.py", "8771"],
+      "port": 8771
     }
   ]
 }

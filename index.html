@@ -190,6 +190,16 @@ table.alarms button{padding:2px 8px;font-size:10px;}
   border-radius:var(--hmi-radius);padding:var(--hmi-s2) var(--hmi-s4);font-size:var(--hmi-fs-body);font-weight:700;}
 #btnRunBench:hover:not(:disabled){border-color:var(--hmi-g5);}
 #benchStatus{font-family:var(--hmi-mono);font-size:var(--hmi-fs-label);color:var(--hmi-g4);}
+/* 모드별 파라미터 — 모드를 옮겨도 자리와 높이가 흔들리지 않도록 항상 같은
+   줄(#benchBar) 안에 두고, 쓸 컨트롤이 없는 모드에서는 비워만 둔다. */
+#benchParams{display:flex;gap:var(--hmi-s3);align-items:center;flex-wrap:wrap;}
+#benchParams .grp{display:flex;align-items:center;gap:var(--hmi-s1);}
+#benchParams .lbl{font-size:var(--hmi-fs-label);color:var(--hmi-g4);text-transform:uppercase;letter-spacing:.04em;}
+#benchParams .seg{display:flex;border:1px solid var(--hmi-g3);border-radius:var(--hmi-radius);overflow:hidden;}
+#benchParams .seg button{border:none;border-radius:0;background:var(--hmi-g1);color:var(--hmi-g4);
+  padding:5px 10px;font-size:var(--hmi-fs-label);font-weight:600;}
+#benchParams .seg button + button{border-left:1px solid var(--hmi-g3);}
+#benchParams .seg button.sel{background:var(--hmi-g3);color:var(--hmi-g5);}
 .bench-chart{position:relative;height:280px;}
 @media (max-width:900px){.bench-chart{height:210px;}}
 
@@ -241,6 +251,7 @@ table.hmi-result td.metric{color:var(--hmi-g4);}
     <h2>A/B 비교</h2>
     <div id="benchBar">
       <button id="btnRunBench">비교 실행</button>
+      <div id="benchParams"></div>
       <span id="benchStatus">비교 실행을 누르면 A안과 B안을 순차로 실행합니다.</span>
     </div>
     <div class="bench-chart"><canvas id="benchChart"></canvas></div>

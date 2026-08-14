@@ -483,8 +483,10 @@ function coreParamsAreDefault(params) {
   return true;
 }
 // 모드별 추가 파라미터의 기본값 — 각 모드의 기준 실행이 그 조건으로 계산됐다.
+// cascade의 disturbanceKind는 여기 없다: 열부하/유량측 두 경우 모두 검증
+// 스위트에 기준값이 있고(disturbance_type_compare.csv 4행) 선택에 따라 그
+// 기준값도 같이 바뀌므로, 어느 쪽을 골라도 "기본에서 벗어난" 상태가 아니다.
 const MODE_PARAM_DEFAULTS = {
-  cascade: (p) => (p.disturbanceKind ?? 'LOAD') === 'LOAD',
   interlock: (p) => (p.feedMode ?? 'BYPASS') === 'BYPASS' && (p.simultaneousStarts ?? 2) === 2,
   sensor: (p) => (p.degradationLevel ?? 1.0) === 1.0,
 };

@@ -52,13 +52,69 @@ const ALL_PANEL_KEYS = Object.keys(PANEL_ANCHORS);
 const MODES = [
   { id: 'hysteresis', label: '히스테리시스', impl: false },
   { id: 'antiwindup', label: 'Anti-windup', impl: true, panels: ['trend', 'tuning', 'operate', 'automeasure'] },
-  { id: 'cascade', label: '캐스케이드 vs 단일루프', impl: false },
+  { id: 'cascade', label: '캐스케이드 vs 단일루프', impl: true, panels: ['trend', 'tuning', 'operate', 'automeasure'] },
   { id: 'interlock', label: '인터록', impl: false },
   { id: 'failover', label: '보호·절체', impl: false },
   { id: 'sensor', label: '센서 열화', impl: false },
   { id: 'full', label: '전체 보기', impl: true, panels: ALL_PANEL_KEYS },
 ];
 const DEFAULT_MODE = 'antiwindup';
+
+/* ---------------------------- 모드별 파라미터 ----------------------------
+ * 게인·SP는 기존 튜닝/운전 패널에서 읽지만, 그 패널에 없는 모드 전용 파라미터는
+ * 여기서 고른다. 값은 sim-bench.runMode()에 그대로 넘어간다. 각 항목의 첫 번째
+ * 선택지가 검증 스위트의 기준 실행 조건과 같다(그래야 기본 상태에서 두 줄이
+ * 일치한다). */
+const MODE_PARAMS = {
+  cascade: [
+    { key: 'disturbanceKind', label: '외란 종류',
+      options: [{ v: 'LOAD', t: '열부하 (외부루프 도메인)' }, { v: 'FLOW', t: '유량측 (내부루프 도메인)' }] },
+  ],
+};
+const modeParamState = {}; // { modeId: { key: value } }
+
+function paramsFor(modeId) {
+  const defs = MODE_PARAMS[modeId];
+  if (!defs) return {};
+  if (!modeParamState[modeId]) {
+    modeParamState[modeId] = {};
+    defs.forEach(d => { modeParamState[modeId][d.key] = d.options[0].v; });
+  }
+  return modeParamState[modeId];
+}
+
+function renderModeParams(mode) {
+  const host = document.getElementById('benchParams');
+  host.innerHTML = '';
+  const defs = MODE_PARAMS[mode.id];
+  if (!defs) return;
+  const st = paramsFor(mode.id);
+  defs.forEach(def => {
+    const grp = document.createElement('div');
+    grp.className = 'grp';
+    const lbl = document.createElement('span');
+    lbl.className = 'lbl';
+    lbl.textContent = def.label;
+    grp.appendChild(lbl);
+    const seg = document.createElement('div');
+    seg.className = 'seg';
+    def.options.forEach(opt => {
+      const btn = document.createElement('button');
+      btn.textContent = opt.t;
+      btn.classList.toggle('sel', st[def.key] === opt.v);
+      btn.addEventListener('click', () => {
+        st[def.key] = opt.v;
+        Array.from(seg.children).forEach(c => c.classList.toggle('sel', c === btn));
+        // 파라미터를 바꾸면 이전 결과는 다른 조건의 것이므로 지운다.
+        delete resultCache[mode.id];
+        clearResult();
+      });
+      seg.appendChild(btn);
+    });
+    grp.appendChild(seg);
+    host.appendChild(grp);
+  });
+}
 
 /* ---------------------------- 설명문 ----------------------------
  * 수치를 본문에 박아넣지 않는다 — 실행할 때마다 달라지는 값은 결과 해석
@@ -100,6 +156,35 @@ const DOCS = {
       고정 시드)다. 같은 현상을 재도 값이 다르게 나오는 것이 정상이며, 어느 쪽이 틀린 것이 아니라
       온라인 지표와 오프라인 지표의 목적이 다른 것이다.</p>`,
   },
+
+  cascade: {
+    what: `캐스케이드는 제어루프를 두 겹으로 겹친 구조다. 느린 외부루프(온도→유량SP, 1000ms)가
+      "유량을 얼마로 맞춰라"라고 지시하면, 빠른 내부루프(유량→펌프속도, 100ms)가 그 유량을 실제로
+      맞춘다. 단일루프는 그 중간 단계 없이 온도오차에서 펌프속도를 곧바로 뽑는다.
+      흔히 "캐스케이드가 더 좋다"고 배우지만, <b>그 이점은 외란이 내부루프 도메인에 들어올 때만
+      나온다</b> — 내부의 빠른 루프가 외란을 온도까지 번지기 전에 먼저 흡수하기 때문이다.
+      외란이 외부루프 도메인(열부하)에 들어오면 그 이점이 없고, 단계가 하나 더 있는 만큼 오히려
+      느려질 수 있다. 위 <b>외란 종류</b>를 바꿔가며 두 경우를 모두 확인해야 하는 이유다.`,
+    detail: `
+      <table>
+        <tr><th>항목</th><th>값</th><th>근거</th></tr>
+        <tr><td>외부루프 주기 : 내부루프 주기</td><td>1000ms : 100ms (10:1)</td><td>제어이론 — 내부루프가 5~10배 이상 빨라야 캐스케이드가 성립(Seborg, <i>Process Dynamics and Control</i>)</td></tr>
+        <tr><td>열부하 외란</td><td>저부하 1000kW → 고부하 3800kW 스텝</td><td>시나리오 B, 시드 2001</td></tr>
+        <tr><td>유량측 외란</td><td>같은 속도에서 유량 ×0.7, 60초</td><td>시나리오 B′ — 배관저항 급증·공급압력 저하 근사(<code>FLOW_DISTURBANCE_FACTOR</code>)</td></tr>
+        <tr><td>복귀 판정 밴드</td><td>±0.3 °C</td><td><code>tests/metrics.js analyzeDisturbanceRejection</code></td></tr>
+      </table>
+      <p><b>단일루프 게인은 어떻게 정했는가.</b> 두 구조를 "같은 유효 이득, 다른 구조"로 비교하려고,
+      내부루프의 비례게인 <code>iKp</code>를 m³/h→% 환산계수로 삼아 외부루프 게인에 곱해 유도했다
+      (<code>Kp_single = oKp × iKp</code>, 차원이 %/°C로 맞는다). <code>iKi</code>는 자체에 시간
+      성분이 있어 어느 항에 곱해도 차원이 맞지 않으므로 쓸 수 없다.</p>
+      <p><b>이것은 한계이기도 하다.</b> 정확한 폐루프 축소가 아니라 정적 이득 합성에 의한 근사이며,
+      단일루프를 따로 최적 튜닝한 결과가 아니다. 그래서 이 비교는 "단일루프가 더 낫다/못하다"의
+      결론이 아니라 "구조 차이가 외란 도메인에 따라 어떻게 다르게 작용하는가"를 보는 것으로 읽어야
+      한다(<code>sim-core.js singleLoopEquivalentGains()</code> 주석 참조).</p>
+      <p><b>차트의 유량 SP선(가는 파선)을 함께 보라.</b> 캐스케이드에서만 외부루프가 유량 SP를
+      만들어 내부루프에 건네주므로, 그 선이 움직이는 모양이 곧 "외부루프가 내부루프에 무엇을
+      지시했는가"다. 단일루프는 그 중간 신호가 없어 속도를 직접 흔든다.</p>`,
+  },
 };
 
 /* ---------------------------- 상태 ---------------------------- */
@@ -139,6 +224,8 @@ function selectMode(modeId) {
   const benchPanel = document.getElementById('benchPanel');
   benchPanel.classList.toggle('hmi-hidden', !mode.impl || mode.id === 'full');
   if (mode.impl && mode.id !== 'full') {
+    renderModeParams(mode);
+    document.getElementById('benchStatus').textContent = '비교 실행을 누르면 A안과 B안을 순차로 실행합니다.';
     const cached = resultCache[modeId];
     if (cached) renderResult(cached); else clearResult();
   }
@@ -238,6 +325,9 @@ function readLiveParams() {
     spTempC: s.spTempC,
   };
 }
+function benchParams(modeId) {
+  return Object.assign(readLiveParams(), paramsFor(modeId));
+}
 
 function runBench() {
   if (benchRunning) return;
@@ -255,7 +345,7 @@ function runBench() {
   // 멈춘다. 한 프레임 양보해 상태 표시를 먼저 그린 뒤 실행한다.
   requestAnimationFrame(() => setTimeout(() => {
     try {
-      const result = SimBench.runMode(mode.id, readLiveParams());
+      const result = SimBench.runMode(mode.id, benchParams(mode.id));
       resultCache[mode.id] = result;
       renderResult(result);
       status.textContent = `완료 — A안·B안 각 1회 실행 (${result.elapsedMs}ms, 고정 시드)`;
@@ -345,51 +435,82 @@ function renderResult(result) {
 }
 
 /* ---- A/B 차트 ----
- * 트레이스에는 상태색을 쓰지 않는다(회색조 명도 2단 + 실선/파선). SP선만
- * 기준선임을 알 수 있게 점선으로 둔다. */
+ * 모드마다 그리는 물리량은 다르지만 축 라벨 위치·범례 위치·선 규칙은 5개
+ * 모드가 동일하다 — 모드를 옮겨 다닐 때 화면 구조가 흔들리면 안 되기 때문이다.
+ * 공통 규칙:
+ *   · 범례는 항상 위쪽 좌측 정렬
+ *   · x축 제목 아래, 좌축(y) 제목 왼쪽, 우축(y1)이 있으면 제목 오른쪽
+ *   · A안 = 어두운 회색, B안 = 밝은 회색. 상태색(녹/황/적)은 쓰지 않는다
+ *     (실물 HMI에서 트렌드 색은 상태를 뜻하지 않는다)
+ *   · 주계열은 굵은 실선, 부계열은 가는 파선, 기준선(SP·관리한계)은 점선
+ * 각 모드는 아래 CHART_SPECS에 축 제목과 데이터셋 구성만 제공한다. */
+const LINE = {
+  main: { pointRadius: 0, borderWidth: 2 },
+  mainDash: { pointRadius: 0, borderWidth: 2, borderDash: [5, 3] },
+  sub: { pointRadius: 0, borderWidth: 1, borderDash: [2, 2] },
+  ref: { pointRadius: 0, borderWidth: 1, borderDash: [3, 4] },
+};
+
+const CHART_SPECS = {
+  antiwindup: {
+    xTitle: '시뮬레이션 시간 (s)', yTitle: '공급온도 (°C)', y1Title: '외부루프 적분항',
+    build: (a, b, c, labels) => [
+      { label: `A · ${a.label} — 공급온도`, data: a.trace.temp, borderColor: c.A, yAxisID: 'y', ...LINE.main },
+      { label: `B · ${b.label} — 공급온도`, data: b.trace.temp, borderColor: c.B, yAxisID: 'y', ...LINE.mainDash },
+      { label: 'A · 외부루프 적분항', data: a.trace.integral, borderColor: c.A, yAxisID: 'y1', ...LINE.sub },
+      { label: 'B · 외부루프 적분항', data: b.trace.integral, borderColor: c.B, yAxisID: 'y1', ...LINE.sub },
+      { label: 'SP', data: labels.map(() => a.meta.sp), borderColor: c.ref, yAxisID: 'y', ...LINE.ref },
+    ],
+  },
+  cascade: {
+    xTitle: '시뮬레이션 시간 (s)', yTitle: '공급온도 (°C)', y1Title: '유량 SP (m³/h)',
+    build: (a, b, c, labels) => [
+      { label: `A · ${a.label} — 공급온도`, data: a.trace.temp, borderColor: c.A, yAxisID: 'y', ...LINE.main },
+      { label: `B · ${b.label} — 공급온도`, data: b.trace.temp, borderColor: c.B, yAxisID: 'y', ...LINE.mainDash },
+      { label: 'A · 유량 SP', data: a.trace.flowSp, borderColor: c.A, yAxisID: 'y1', ...LINE.sub },
+      { label: 'B · 유량 SP', data: b.trace.flowSp, borderColor: c.B, yAxisID: 'y1', ...LINE.sub },
+      { label: 'SP', data: labels.map(() => a.meta.sp), borderColor: c.ref, yAxisID: 'y', ...LINE.ref },
+    ],
+  },
+};
+
 function drawChart(result) {
   const canvas = document.getElementById('benchChart');
-  if (!canvas || typeof Chart === 'undefined') return;
+  const spec = CHART_SPECS[result.modeId];
+  if (!canvas || typeof Chart === 'undefined' || !spec) return;
   if (benchChart) { benchChart.destroy(); benchChart = null; }
 
   const [a, b] = result.runs;
   const labels = a.trace.t.map(t => t.toFixed(0));
-  const cA = token('--hmi-trace-a', '#8f9dad');
-  const cB = token('--hmi-trace-b', '#e8eef5');
-  const cRef = token('--hmi-g3', '#25313f');
-  const datasets = [];
+  const c = {
+    A: token('--hmi-trace-a', '#8f9dad'),
+    B: token('--hmi-trace-b', '#e8eef5'),
+    ref: token('--hmi-g3', '#25313f'),
+  };
+  const axisColor = token('--hmi-g4', '#748094'), gridColor = '#1c2532';
 
-  if (result.modeId === 'antiwindup') {
-    datasets.push(
-      { label: `A · ${a.label} — 공급온도`, data: a.trace.temp, borderColor: cA,
-        yAxisID: 'y', pointRadius: 0, borderWidth: 2 },
-      { label: `B · ${b.label} — 공급온도`, data: b.trace.temp, borderColor: cB,
-        yAxisID: 'y', pointRadius: 0, borderWidth: 2, borderDash: [5, 3] },
-      { label: 'A · 외부루프 적분항', data: a.trace.integral, borderColor: cA,
-        yAxisID: 'y1', pointRadius: 0, borderWidth: 1, borderDash: [2, 2] },
-      { label: 'B · 외부루프 적분항', data: b.trace.integral, borderColor: cB,
-        yAxisID: 'y1', pointRadius: 0, borderWidth: 1, borderDash: [2, 2] },
-      { label: 'SP', data: labels.map(() => a.meta.sp), borderColor: cRef,
-        yAxisID: 'y', pointRadius: 0, borderWidth: 1, borderDash: [3, 4] },
-    );
+  const scales = {
+    x: { ticks: { color: axisColor, maxTicksLimit: 10 }, grid: { color: gridColor },
+         title: { display: true, text: spec.xTitle, color: axisColor } },
+    y: { position: 'left', ticks: { color: axisColor }, grid: { color: gridColor },
+         title: { display: true, text: spec.yTitle, color: axisColor } },
+  };
+  if (spec.y1Title) {
+    scales.y1 = { position: 'right', ticks: { color: axisColor }, grid: { display: false },
+                  title: { display: true, text: spec.y1Title, color: axisColor } };
   }
 
-  const axisColor = '#748094', gridColor = '#1c2532';
   benchChart = new Chart(canvas.getContext('2d'), {
     type: 'line',
-    data: { labels, datasets },
+    data: { labels, datasets: spec.build(a, b, c, labels) },
     options: {
       responsive: true, maintainAspectRatio: false, animation: false,
       interaction: { mode: 'index', intersect: false },
-      scales: {
-        x: { ticks: { color: axisColor, maxTicksLimit: 10 }, grid: { color: gridColor },
-             title: { display: true, text: '시뮬레이션 시간 (s)', color: axisColor } },
-        y: { position: 'left', ticks: { color: axisColor }, grid: { color: gridColor },
-             title: { display: true, text: '공급온도 (°C)', color: axisColor } },
-        y1: { position: 'right', ticks: { color: axisColor }, grid: { display: false },
-              title: { display: true, text: '적분항', color: axisColor } },
+      scales,
+      plugins: {
+        legend: { position: 'top', align: 'start',
+                  labels: { color: token('--hmi-g5', '#c9d6e3'), boxWidth: 14, font: { size: 10 } } },
       },
-      plugins: { legend: { labels: { color: '#c9d6e3', boxWidth: 14, font: { size: 10 } } } },
     },
   });
 }
