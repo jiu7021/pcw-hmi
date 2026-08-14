@@ -152,11 +152,18 @@ table.alarms button{padding:2px 8px;font-size:10px;}
   --hmi-mono:'SF Mono','Consolas','Menlo',monospace;
   --hmi-fs-num:15px; --hmi-fs-body:13px; --hmi-fs-label:11px;
   --hmi-radius:4px;
-  /* A/B 트레이스 — 회색조 명도 2단으로는 대비가 부족해 구분이 안 됐다.
-     A안=밝은 시안 실선, B안=주황 파선으로 고정하고 6개 모드 전부 동일하게 쓴다.
+  /* A/B 트레이스 — 안(案)은 색상, 축은 톤·굵기로 구분한다.
+       A안 = 시안 계열 실선, B안 = 주황 계열 파선
+       좌축(주 지표) = 진한 톤 + 2.5px, 우축(보조 지표) = 옅은 톤 + 1.5px
+     같은 안의 시리즈가 둘 이상일 때 색만으로는 구분이 안 되므로(예전에
+     "A 공급온도"와 "A 적분항"이 똑같은 시안 실선이었다) 축을 이 두 축으로
+     갈라낸다. 기준선(SP·임계·관리한계)은 A/B 색을 쓰지 않고 회색 점선으로
+     통일한다 — 데이터가 아니라 참조선이기 때문이다.
      상태색 3색(정상 녹 / 경보 황 / 트립 적)과는 다른 색상군이라 상태 표시와
-     혼동되지 않는다. 기준선(임계·관리한계)만 회색 점선으로 남긴다. */
-  --hmi-trace-a:#22d3ee; --hmi-trace-b:#f97316;
+     혼동되지 않는다. */
+  --hmi-a-strong:#06b6d4; --hmi-a-soft:#a5f3fc;
+  --hmi-b-strong:#f97316; --hmi-b-soft:#fdba74;
+  --hmi-trace-ref:#8b97a8;
 }
 .hmi-hidden{display:none !important;}
 
@@ -219,20 +226,6 @@ table.alarms button{padding:2px 8px;font-size:10px;}
 .bench-chart{position:relative;height:280px;}
 @media (max-width:900px){.bench-chart{height:210px;}}
 
-/* 펌프 상태 배지 — 히스테리시스 모드에서 계통도 대신 쓴다. 이 모드에서 볼 것은
-   배관도가 아니라 "지금 몇 대가 돌고 있는가"뿐이기 때문이다. */
-#pumpBadges{display:flex;gap:var(--hmi-s2);flex-wrap:wrap;margin-bottom:var(--hmi-s3);}
-#pumpBadges .pb{display:flex;align-items:center;gap:var(--hmi-s2);border:1px solid var(--hmi-g3);
-  border-radius:var(--hmi-radius);padding:var(--hmi-s2) var(--hmi-s3);background:var(--hmi-g2);}
-#pumpBadges .pb .nm{font-family:var(--hmi-mono);font-size:var(--hmi-fs-body);color:var(--hmi-g5);}
-#pumpBadges .pb .st{font-family:var(--hmi-mono);font-size:var(--hmi-fs-label);font-weight:700;}
-#pumpBadges .pb .dot{width:9px;height:9px;border-radius:50%;background:var(--hmi-g4);}
-#pumpBadges .pb.run .dot{background:var(--hmi-ok);} #pumpBadges .pb.run .st{color:var(--hmi-ok);}
-#pumpBadges .pb.standby .dot{background:var(--hmi-g4);} #pumpBadges .pb.standby .st{color:var(--hmi-g4);}
-#pumpBadges .pb.stop .dot{background:var(--hmi-g4);} #pumpBadges .pb.stop .st{color:var(--hmi-g4);}
-#pumpBadges .pb.fault .dot{background:var(--hmi-trip);} #pumpBadges .pb.fault .st{color:var(--hmi-trip);}
-#pumpBadges .pb .spd{font-family:var(--hmi-mono);font-size:var(--hmi-fs-label);color:var(--hmi-g4);}
-
 /* 모드 안내 한 줄 — 화면에서 바로 읽어야 하는 짧은 보충 설명 */
 .hmi-hint{font-size:var(--hmi-fs-label);color:var(--hmi-g4);line-height:1.6;
   margin-bottom:var(--hmi-s3);padding-left:var(--hmi-s2);border-left:2px solid var(--hmi-g3);}
@@ -248,6 +241,11 @@ table.hmi-result td.metric{color:var(--hmi-g4);}
 .hmi-verdict{margin-top:var(--hmi-s3);padding:var(--hmi-s3);background:var(--hmi-g2);
   border-left:3px solid var(--hmi-g4);border-radius:0 var(--hmi-radius) var(--hmi-radius) 0;line-height:1.65;}
 
+/* 그래프 읽는 법 — 설명 맨 앞에 두고 시각적으로 분리한다.
+   처음 보는 사람이 어디를 볼지 5초 안에 알아야 하는 문장이다. */
+.hmi-readguide{display:block;background:var(--hmi-g2);border-left:3px solid var(--hmi-a-strong);
+  border-radius:0 var(--hmi-radius) var(--hmi-radius) 0;padding:var(--hmi-s2) var(--hmi-s3);
+  margin-bottom:var(--hmi-s3);line-height:1.7;color:var(--hmi-g5);}
 #modeDoc h3{font-size:var(--hmi-fs-body);color:var(--hmi-g5);margin:0 0 var(--hmi-s2);
   padding-bottom:var(--hmi-s1);border-bottom:1px solid var(--hmi-g3);}
 #modeDoc p{margin:0 0 var(--hmi-s2);line-height:1.7;color:var(--hmi-g5);}
@@ -286,9 +284,13 @@ table.hmi-result td.metric{color:var(--hmi-g4);}
       <button id="btnRunBench">비교 실행</button>
       <span id="benchStatus">비교 실행을 누르면 A안과 B안을 순차로 실행합니다.</span>
     </div>
+    <div id="benchScope" class="hmi-hint">
+      비교 실행을 누르면 A안과 B안을 각각 처음부터 끝까지 새로 계산합니다.
+      위쪽 라이브 시뮬레이터와는 별개입니다 — 라이브 상태는 이 결과에 나타나지 않습니다.<br>
+      아래 조작 파라미터를 바꾸고 다시 누르면 결과 수치도 그에 맞춰 달라집니다.
+    </div>
     <div id="benchParams"></div>
     <div id="benchHint" class="hmi-hint"></div>
-    <div id="pumpBadges"></div>
     <div class="bench-chart"><canvas id="benchChart"></canvas></div>
     <div id="benchResult"></div>
   </section>
