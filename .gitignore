@@ -16,3 +16,7 @@ secrets/
 
 # Machine-local Node.js PATH helper (points at a sandbox-specific install path)
 .node-path.sh
+
+# 개발용 로컬 서버 설정 (배포와 무관)
+.claude/launch.json
+.claude/devserver.py

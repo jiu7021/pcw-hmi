@@ -89,8 +89,8 @@ const BASELINE = {
   },
   // interlock_bypass_demo.csv:2,3
   interlock: {
-    A: { minVoltagePct: 88.08, breachesFloor: false },
-    B: { minVoltagePct: 80.67, breachesFloor: true, essEngagedAtPct: 81.78 },
+    A: { minVoltagePct: 88.08, breachesFloor: false, peakCurrentPct: 794, essEngagedAtS: 0.03 },
+    B: { minVoltagePct: 80.67, breachesFloor: true, essEngagedAtPct: 81.78, peakCurrentPct: 1289, essEngagedAtS: 0.025 },
     floorPct: 85,
     source: 'interlock_bypass_demo.csv:2,3',
   },
@@ -292,8 +292,16 @@ function runInterlock(params) {
         minVoltagePct: r.minV * 100,
         breachesFloor: r.minV < PQLayer.CONST.VOLTAGE_MANAGEMENT_FLOOR_PU,
         essEngagedAtPct: r.essOnV != null ? r.essOnV * 100 : null,
+        // 기동 시작 시점을 0으로 둔 경과시간이다(시뮬레이션 절대시각이 아니다).
+        // runCase의 t가 0에서 출발하므로 그대로 쓴다.
+        essEngagedAtS: r.essOnAtS,
+        peakCurrentPct: Math.max(...r.trace.map(p => p.iPu)) * 100,
       },
-      trace: { t: downsample(r.trace, p => p.t), volt: downsample(r.trace, p => p.vPu * 100) },
+      trace: {
+        t: downsample(r.trace, p => p.t),
+        volt: downsample(r.trace, p => p.vPu * 100),
+        curr: downsample(r.trace, p => p.iPu * 100),
+      },
     };
   });
 
@@ -305,8 +313,10 @@ function runInterlock(params) {
     runs,
     rows: [
       row('최저 모선전압', '%', 2, ok, bad, 'minVoltagePct', BASELINE.interlock),
+      row('최대 기동전류', '%FLA', 0, ok, bad, 'peakCurrentPct', BASELINE.interlock),
+      row('ESS 투입 시점 (기동 후 경과)', 's', 3, ok, bad, 'essEngagedAtS', BASELINE.interlock, '투입 안 함'),
     ],
-    extra: { floorPct },
+    extra: { floorPct, essA: ok.metrics.essEngagedAtS, essB: bad.metrics.essEngagedAtS },
     baselineSource: BASELINE.interlock.source,
     verdict:
       `준수 ${ok.metrics.minVoltagePct.toFixed(2)}% → 우회 ${bad.metrics.minVoltagePct.toFixed(2)}%로 ${gap.toFixed(2)}%p 더 내려간다. ` +
@@ -345,6 +355,8 @@ function runFailover(params) {
         t: downsample(r.trendSeries, p => p.t),
         speeds: [0, 1, 2].map(i => downsample(r.trendSeries, p => p.pumpSpeeds[i])),
         temp: downsample(r.trendSeries, p => p.supplyTempC),
+        // 범례에 "P-1 (BYPASS)"처럼 급전모드를 같이 적으려고 최종값을 함께 넘긴다.
+        feedModes: r.state.pumps.map(p => p.feedMode),
       },
       // 판정문의 "전 구간 최대 온도차"는 솎아낸 트레이스가 아니라 원본
       // 해상도로 계산해야 한다 — 표시용으로 걸러낸 점들 사이에 더 큰 차이가
@@ -468,25 +480,25 @@ function runSensor(params) {
  *   근사이긴 해도 방법 자체는 점검했다 — 실제와 동일한 정책으로 역산하면 실제
  *   토글 수가 그대로 재현된다(tests/run.js의 역산 타당성 점검). */
 const CF_POLICIES = {
-  actual_policy: { label: '실제 정책 (밴드 90/40 + 지연 15s/30s)',
+  actual_policy: { label: '히스테리시스 적용 (90%/15s · 40%/30s)',
     upPct: SimCore.CONST.STAGE_UP_SPEED_PCT, downPct: SimCore.CONST.STAGE_DOWN_SPEED_PCT,
     upDelay: SimCore.CONST.STAGE_UP_DELAY_S, downDelay: SimCore.CONST.STAGE_DOWN_DELAY_S },
-  no_delay: { label: '지연 제거 (밴드만)',
+  no_delay: { label: '확인지연만 제거',
     upPct: SimCore.CONST.STAGE_UP_SPEED_PCT, downPct: SimCore.CONST.STAGE_DOWN_SPEED_PCT,
     upDelay: 0, downDelay: 0 },
   // 밴드 제거 = 단일 임계로 투입·해제를 모두 판정. 임계값을 새로 지어내지 않으려고
   // 기존 STAGE_UP_SPEED_PCT를 그대로 쓴다.
-  no_band: { label: '밴드 제거 (지연만)',
+  no_band: { label: '임계 차이만 제거',
     upPct: SimCore.CONST.STAGE_UP_SPEED_PCT, downPct: SimCore.CONST.STAGE_UP_SPEED_PCT,
     upDelay: SimCore.CONST.STAGE_UP_DELAY_S, downDelay: SimCore.CONST.STAGE_DOWN_DELAY_S },
-  none: { label: '밴드·지연 모두 제거',
+  none: { label: '히스테리시스 없음 (단순 임계)',
     upPct: SimCore.CONST.STAGE_UP_SPEED_PCT, downPct: SimCore.CONST.STAGE_UP_SPEED_PCT,
     upDelay: 0, downDelay: 0 },
 };
 const CF_SCENARIOS = {
-  F: { key: 'F', make: () => SimTestScenarios.scenarioF(), label: '임계 근처 25s 진동 (적대적)' },
-  A: { key: 'A', make: () => SimTestScenarios.scenarioA(), label: '정상 3단 순환 부하' },
-  B: { key: 'B', make: () => SimTestScenarios.scenarioB({ seed: 2001 }), label: '급격한 부하 스텝' },
+  F: { key: 'F', make: () => SimTestScenarios.scenarioF(), label: '대수제어 경계에서 부하가 흔들릴 때' },
+  A: { key: 'A', make: () => SimTestScenarios.scenarioA(), label: '평소처럼 부하가 오르내릴 때' },
+  B: { key: 'B', make: () => SimTestScenarios.scenarioB({ seed: 2001 }), label: '부하가 갑자기 크게 뛸 때' },
 };
 
 function runHysteresis(params) {
@@ -552,7 +564,7 @@ function runHysteresis(params) {
 /* ---------------------------- 표시용 행 조립 ----------------------------
  * digits가 숫자면 수치 행(허용오차 비교), null이면 문자열 행(정확히 일치해야
  * 함) — 절체 모드의 "100/74.9/74.9"처럼 숫자 하나로 줄일 수 없는 지표가 있다. */
-function makeRow(label, unit, digits, runA, runB, metricKey, baseline) {
+function makeRow(label, unit, digits, runA, runB, metricKey, baseline, nullLabel) {
   const cell = (run, side) => {
     const b = baseline && baseline[side] ? baseline[side][metricKey] : undefined;
     return {
@@ -561,10 +573,11 @@ function makeRow(label, unit, digits, runA, runB, metricKey, baseline) {
       hasBaseline: b !== undefined && b !== null,
     };
   };
-  return { label, unit, digits, metricKey, a: cell(runA, 'A'), b: cell(runB, 'B') };
+  return { label, unit, digits, metricKey, nullLabel: nullLabel || null,
+           a: cell(runA, 'A'), b: cell(runB, 'B') };
 }
-function row(label, unit, digits, runA, runB, metricKey, baseline) {
-  return makeRow(label, unit, digits, runA, runB, metricKey, baseline);
+function row(label, unit, digits, runA, runB, metricKey, baseline, nullLabel) {
+  return makeRow(label, unit, digits, runA, runB, metricKey, baseline, nullLabel);
 }
 function rowText(label, unit, runA, runB, metricKey, baseline) {
   return makeRow(label, unit, null, runA, runB, metricKey, baseline);

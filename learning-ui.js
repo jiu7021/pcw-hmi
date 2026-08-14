@@ -50,10 +50,13 @@ const ALL_PANEL_KEYS = Object.keys(PANEL_ANCHORS);
  * (탭 배치·가로 스크롤을 먼저 확인할 수 있게).
  * 히스테리시스는 A/B가 역산 근사라 맨 마지막에 붙인다. */
 const MODES = [
-  { id: 'hysteresis', label: '히스테리시스', impl: true, panels: ['trend', 'operate', 'runtime', 'pid'] },
+  // 히스테리시스: 계통도(배관도) 대신 펌프 상태 배지만 — 이 모드에서 볼 것은
+  // 배관 경로가 아니라 "지금 몇 대가 돌고 있는가"다. 온도 트렌드도 뺀다.
+  { id: 'hysteresis', label: '히스테리시스', impl: true, panels: ['operate', 'runtime'], pumpBadges: true },
   { id: 'antiwindup', label: 'Anti-windup', impl: true, panels: ['trend', 'tuning', 'operate', 'automeasure'] },
-  { id: 'cascade', label: '캐스케이드 vs 단일루프', impl: true, panels: ['trend', 'tuning', 'operate', 'automeasure'] },
-  { id: 'interlock', label: '인터록', impl: true, panels: ['pid', 'electrical', 'pq', 'runtime'] },
+  // 캐스케이드: 계통도를 넣고, 외부루프·내부루프가 어디에 걸리는지 주석을 얹는다.
+  { id: 'cascade', label: '캐스케이드 vs 단일루프', impl: true, panels: ['pid', 'trend', 'tuning', 'operate'], loopAnnotation: true },
+  { id: 'interlock', label: '인터록(SAG)', impl: true, panels: ['pid', 'electrical', 'pq', 'runtime'] },
   { id: 'failover', label: '보호·절체', impl: true, panels: ['pid', 'fault', 'electrical', 'runtime', 'alarms'] },
   { id: 'sensor', label: '센서 열화', impl: true, panels: ['sensors', 'trend', 'alarms'] },
   { id: 'full', label: '전체 보기', impl: true, panels: ALL_PANEL_KEYS },
@@ -67,26 +70,39 @@ const DEFAULT_MODE = 'antiwindup';
  * 일치한다). */
 const MODE_PARAMS = {
   hysteresis: [
-    { key: 'cfScenario', label: '부하 조건',
-      options: [{ v: 'F', t: '임계 근처 25s 진동' }, { v: 'A', t: '정상 3단 순환' }, { v: 'B', t: '급격한 부하 스텝' }] },
-    { key: 'cfPolicy', label: 'B안 정책',
-      options: [{ v: 'none', t: '밴드·지연 모두 제거' }, { v: 'no_delay', t: '지연만 제거' }, { v: 'no_band', t: '밴드만 제거' }] },
+    { key: 'cfScenario', label: '부하 상황',
+      options: [{ v: 'F', t: '대수제어 경계에서 부하가 흔들릴 때' },
+                { v: 'A', t: '평소처럼 부하가 오르내릴 때' },
+                { v: 'B', t: '부하가 갑자기 크게 뛸 때' }] },
+    // B안 정책은 "히스테리시스 없음" 하나로 고정한다 — 선택지를 셋으로 두면
+    // 처음 보는 사람에게는 무엇을 고르라는 것인지 알 수 없다. 중간 변형
+    // (확인지연만 제거 / 임계 차이만 제거)은 "더 알아보기"의 수치로만 남긴다.
   ],
   cascade: [
-    { key: 'disturbanceKind', label: '외란 종류',
-      options: [{ v: 'LOAD', t: '열부하 (외부루프 도메인)' }, { v: 'FLOW', t: '유량측 (내부루프 도메인)' }] },
+    { key: 'disturbanceKind', label: '외란이 생기는 곳',
+      options: [{ v: 'LOAD', t: '열부하가 갑자기 늘 때' }, { v: 'FLOW', t: '배관이 막혀 유량이 줄 때' }] },
   ],
   interlock: [
-    { key: 'simultaneousStarts', label: '동시 기동 대수',
+    { key: 'simultaneousStarts', label: '한꺼번에 켜는 펌프',
       options: [{ v: 2, t: '2대' }, { v: 3, t: '3대' }] },
-    { key: 'feedMode', label: '급전모드',
-      options: [{ v: 'BYPASS', t: '바이패스 (DOL)' }, { v: 'VFD', t: 'VFD 소프트스타트' }] },
+    { key: 'feedMode', label: '기동 방식',
+      options: [{ v: 'BYPASS', t: '상용전원 직입 (DOL)' }, { v: 'VFD', t: '인버터 소프트스타트 (VFD)' }] },
   ],
   sensor: [
-    { key: 'degradationLevel', label: '열화 수준',
-      options: [{ v: 1.0, t: '100 %' }, { v: 0.5, t: '50 %' }, { v: 0.25, t: '25 %' }] },
+    { key: 'degradationLevel', label: '센서가 낡은 정도',
+      options: [{ v: 1.0, t: '많이 낡음' }, { v: 0.5, t: '절반쯤' }, { v: 0.25, t: '조금' }] },
   ],
 };
+
+// 화면에서 바로 읽어야 하는 한 줄 보충 설명(모드별).
+const MODE_HINTS = {
+  interlock: 'VFD 소프트스타트는 주파수를 0부터 올리며 전류를 제한해 기동하므로 돌입전류가 정격의 110~150%에 그친다. ' +
+    '상용전원 직입(DOL)은 그 제한이 없어 600~800%가 흐른다 — 그래서 동시 기동 금지 인터록이 실제로 필요한 것은 DOL 조건뿐이다. ' +
+    '기동 방식을 VFD로 바꿔보면 같은 대수를 겹쳐도 관리한계를 넘지 않는 것을 확인할 수 있다.',
+  hysteresis: '투입은 90%에서 15초, 해제는 40%에서 30초 — 임계를 다르게 둬서 경계에서 반복 기동을 막는다.',
+  cascade: '계통도의 점선 상자가 각 루프가 걸리는 구간이다 — 내부루프는 펌프·유량계, 외부루프는 공급온도.',
+};
+
 const modeParamState = {}; // { modeId: { key: value } }
 
 function paramsFor(modeId) {
@@ -137,13 +153,13 @@ function renderModeParams(mode) {
  * 표와 판정문이 담당하고, 여기에는 변하지 않는 원리만 쓴다. */
 const DOCS = {
   hysteresis: {
-    what: `펌프를 몇 대 돌릴지 정하는 대수제어는 속도지령이 임계값을 넘으면 한 대 더 투입하고,
-      충분히 내려가면 한 대 뺀다. 이때 투입 임계(90%)와 해제 임계(40%)를 다르게 두고(히스테리시스 밴드),
-      각각 15초·30초를 유지해야 실행한다(확인지연). 두 장치가 없으면 속도지령이 임계 근처에서
-      조금만 흔들려도 펌프가 계속 붙었다 떨어졌다 한다 — 헌팅이다. 실제 설비에서는 기동 횟수가
-      곧 마모와 수명이므로 이것은 비용 문제이기도 하다.
-      아래 비교는 같은 속도지령 궤적에 대해 <b>실제 정책</b>과 <b>그 장치를 뺀 정책</b>이 각각 몇 번
-      투입·해제했을지를 센다. 차트에서 속도지령선은 하나뿐이고, 우축의 운전 대수 계단만 갈라진다.`,
+    what: `<b>투입은 90%에서 15초, 해제는 40%에서 30초 — 임계를 다르게 둬서 경계에서 반복 기동을 막는다.</b>
+      대수제어는 펌프를 몇 대 돌릴지 정하는 로직이다. 속도지령이 투입 임계를 넘으면 한 대 더 붙이고,
+      해제 임계 아래로 내려가면 한 대 뺀다. 두 임계가 같고 유지시간도 없다면 속도지령이 경계에서
+      조금만 흔들려도 펌프가 계속 붙었다 떨어졌다 한다 — 헌팅이다. 실제 설비에서 기동 횟수는 곧
+      마모와 수명이므로 이것은 비용 문제이기도 하다.
+      차트에서 속도지령선은 하나뿐이고(A·B가 같은 궤적을 공유한다), 갈라지는 것은 우축의 투입 대수
+      계단뿐이다.`,
     detail: `
       <table>
         <tr><th>항목</th><th>값</th><th>근거</th></tr>
@@ -163,10 +179,17 @@ const DOCS = {
       타당성 점검, <code>staging_counterfactual.csv</code>의 <code>reproducesActual</code> 열).
       재현되지 않으면 역산 결과 전부를 믿을 수 없다는 뜻이므로 스위트가 그것을 먼저 확인한다.
       초기 마스터 기동에 의한 0→1 전이는 대수제어의 판단이 아니므로 양쪽 모두에서 제외한다.</p>
-      <p><b>부하 조건을 바꿔보면 두 장치의 역할이 갈린다.</b> 임계 근처 진동(적대적) 조건에서는
-      지연을 빼도 토글이 늘지 않는다 — 밴드만으로 이미 걸러지기 때문이다. 반면 정상 순환 부하에서는
-      지연을 빼면 토글이 크게 늘어난다. 어느 한 장치가 항상 주역인 것이 아니라 부하 패턴에 따라
-      기여도가 달라진다.</p>`,
+      <p><b>두 장치 중 무엇이 일하고 있는가.</b> 화면에서는 "히스테리시스 없음"(둘 다 제거)만
+      비교하지만, 확인지연과 임계 차이를 하나씩만 빼면 이렇게 갈린다(토글 횟수, 초기 기동 제외):</p>
+      <table>
+        <tr><th>부하 상황</th><th>적용</th><th>확인지연만 제거</th><th>임계 차이만 제거</th><th>둘 다 제거</th></tr>
+        <tr><td>대수제어 경계에서 흔들릴 때</td><td>2</td><td>2</td><td>4</td><td>32</td></tr>
+        <tr><td>평소처럼 오르내릴 때</td><td>2</td><td>12</td><td>4</td><td>368</td></tr>
+        <tr><td>갑자기 크게 뛸 때</td><td>3</td><td>8</td><td>6</td><td>134</td></tr>
+      </table>
+      <p>경계에서 흔들릴 때는 확인지연을 빼도 토글이 늘지 않는다 — 임계 차이만으로 이미 걸러지기
+      때문이다. 반면 평소 부하에서는 확인지연이 6배를 걸러낸다. 어느 한 장치가 항상 주역인 것이
+      아니라 부하 패턴에 따라 기여도가 달라진다(<code>staging_counterfactual.csv</code>).</p>`,
   },
 
   antiwindup: {
@@ -371,6 +394,12 @@ function selectMode(modeId) {
 
   const benchPanel = document.getElementById('benchPanel');
   benchPanel.classList.toggle('hmi-hidden', !mode.impl || mode.id === 'full');
+  applyPumpBadges(mode);
+  applyLoopAnnotation(mode);
+  const hintEl = document.getElementById('benchHint');
+  const hint = MODE_HINTS[mode.id];
+  hintEl.innerHTML = hint || '';
+  hintEl.classList.toggle('hmi-hidden', !hint || !mode.impl || mode.id === 'full');
   if (mode.impl && mode.id !== 'full') {
     renderModeParams(mode);
     document.getElementById('benchStatus').textContent = '비교 실행을 누르면 A안과 B안을 순차로 실행합니다.';
@@ -411,6 +440,72 @@ function applyPanelVisibility(mode) {
   });
   const grid = document.querySelector('.grid');
   if (grid) grid.classList.toggle('hmi-onecol', visibleCols < 2);
+}
+
+/* ---- 펌프 상태 배지 (히스테리시스 모드) ----
+ * 계통도 대신 쓴다. 라이브 state를 읽기만 하고 쓰지 않는다. */
+let pumpBadgeTimer = null;
+function applyPumpBadges(mode) {
+  const host = document.getElementById('pumpBadges');
+  const on = !!mode.pumpBadges && mode.impl && mode.id !== 'full';
+  host.classList.toggle('hmi-hidden', !on);
+  if (pumpBadgeTimer) { clearInterval(pumpBadgeTimer); pumpBadgeTimer = null; }
+  if (!on) { host.innerHTML = ''; return; }
+  renderPumpBadges();
+  // 라이브 상태라 계속 갱신해야 한다. 벤치 계산과 무관한 순수 표시 루프다.
+  pumpBadgeTimer = setInterval(renderPumpBadges, 500);
+}
+const PUMP_STATUS_TEXT = { RUNNING: 'RUN', STARTING: 'START', STANDBY: 'STANDBY', STOPPED: 'STOP', FAULT: 'FAULT' };
+function renderPumpBadges() {
+  const s = (typeof state !== 'undefined') ? state : null;
+  const host = document.getElementById('pumpBadges');
+  if (!s || !host || host.classList.contains('hmi-hidden')) return;
+  host.innerHTML = s.pumps.map(p => {
+    const st = p.fault ? 'FAULT' : p.status;
+    const cls = p.fault ? 'fault' : (st === 'RUNNING' || st === 'STARTING') ? 'run'
+      : (st === 'STANDBY' ? 'standby' : 'stop');
+    return `<div class="pb ${cls}"><span class="dot"></span><span class="nm">P-${p.id}</span>` +
+           `<span class="st">${PUMP_STATUS_TEXT[st] || st}</span>` +
+           `<span class="spd">${p.speedPct.toFixed(0)}%</span></div>`;
+  }).join('') + `<div class="pb"><span class="nm">투입 대수</span>` +
+    `<span class="st">${s.pumps.filter(p => p.status === 'RUNNING').length} / 3</span></div>`;
+}
+
+/* ---- 계통도 루프 주석 (캐스케이드 모드) ----
+ * 기존 SVG(buildPID)는 건드리지 않고, 이 모드에서만 주석 그룹을 덧붙였다가
+ * 모드를 벗어나면 통째로 지운다 — 다른 모드와 전체 보기에는 흔적이 남지 않는다. */
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function applyLoopAnnotation(mode) {
+  const svg = document.getElementById('pid');
+  if (!svg) return;
+  const old = svg.querySelector('#loopAnnot');
+  if (old) old.remove();
+  if (!mode.loopAnnotation || !mode.impl || mode.id === 'full') return;
+
+  const g = document.createElementNS(SVG_NS, 'g');
+  g.setAttribute('id', 'loopAnnot');
+  const box = (x, y, w, h, color) => {
+    const r = document.createElementNS(SVG_NS, 'rect');
+    Object.entries({ x, y, width: w, height: h, rx: 8, fill: 'none', stroke: color,
+      'stroke-width': 1.5, 'stroke-dasharray': '6 4' }).forEach(([k, v]) => r.setAttribute(k, v));
+    return r;
+  };
+  const text = (x, y, t, color) => {
+    const e = document.createElementNS(SVG_NS, 'text');
+    e.setAttribute('x', x); e.setAttribute('y', y); e.setAttribute('fill', color);
+    e.setAttribute('font-size', '12'); e.setAttribute('font-weight', '700');
+    e.textContent = t;
+    return e;
+  };
+  const cA = token('--hmi-trace-a', '#22d3ee');
+  const cB = token('--hmi-trace-b', '#f97316');
+  // 내부루프: 펌프 3대와 그 토출 유량(유량계) 구간 — 100ms 주기
+  g.appendChild(box(150, 205, 140, 215, cA));
+  g.appendChild(text(150, 200, '내부루프 100ms — 유량 → 펌프속도', cA));
+  // 외부루프: 공급온도 계측 지점 — 1000ms 주기
+  g.appendChild(box(600, 115, 200, 45, cB));
+  g.appendChild(text(600, 110, '외부루프 1000ms — 온도 → 유량SP', cB));
+  svg.appendChild(g);
 }
 
 function resizeCharts() {
@@ -510,19 +605,19 @@ function runBench() {
 }
 
 /* ---------------------------- 결과 렌더 ---------------------------- */
-function fmtVal(v, digits) {
-  if (v == null) return '미회복';
+function fmtVal(v, digits, nullLabel) {
+  if (v == null) return nullLabel || '미회복';
   if (digits == null) return String(v);
   return Number(v).toFixed(digits);
 }
 
-function cellHTML(cell, digits, unit, paramsAreDefault) {
-  const measured = fmtVal(cell.measured, digits);
+function cellHTML(cell, digits, unit, paramsAreDefault, nullLabel) {
+  const measured = fmtVal(cell.measured, digits, nullLabel);
   if (!cell.hasBaseline) {
     return `<span class="hmi-num">${measured}${unit}</span>
       <span class="hmi-sub">기준 실행 : — (검증 스위트 미수록)</span>`;
   }
-  const base = fmtVal(cell.baseline, digits);
+  const base = fmtVal(cell.baseline, digits, nullLabel);
   // 파라미터를 바꾼 뒤에는 두 값이 다른 것이 정상이다 — 일치/불일치 판정은
   // 기본 파라미터로 돌렸을 때만 의미가 있다.
   if (!paramsAreDefault) {
@@ -560,8 +655,8 @@ function renderResult(result) {
     const unit = r.unit ? ' ' + r.unit : '';
     return `<tr>
       <td class="metric">${r.label}</td>
-      <td>${cellHTML(r.a, r.digits, unit, def)}</td>
-      <td>${cellHTML(r.b, r.digits, unit, def)}</td>
+      <td>${cellHTML(r.a, r.digits, unit, def, r.nullLabel)}</td>
+      <td>${cellHTML(r.b, r.digits, unit, def, r.nullLabel)}</td>
     </tr>`;
   }).join('');
 
@@ -596,101 +691,114 @@ function renderResult(result) {
  * 각 모드는 아래 CHART_SPECS에 축 제목과 데이터셋 구성만 제공한다. */
 const LINE = {
   main: { pointRadius: 0, borderWidth: 2 },
-  mainDash: { pointRadius: 0, borderWidth: 2, borderDash: [5, 3] },
-  sub: { pointRadius: 0, borderWidth: 1, borderDash: [2, 2] },
+  mainDash: { pointRadius: 0, borderWidth: 2, borderDash: [6, 4] },
+  sub: { pointRadius: 0, borderWidth: 1.5 },
+  subDash: { pointRadius: 0, borderWidth: 1.5, borderDash: [6, 4] },
   ref: { pointRadius: 0, borderWidth: 1, borderDash: [3, 4] },
+  step: { pointRadius: 0, borderWidth: 2.5, stepped: true },
+  stepDash: { pointRadius: 0, borderWidth: 2.5, stepped: true, borderDash: [6, 4] },
 };
 
+/* 각 모드에서 실제로 봐야 할 계열만 남긴다 — 모든 모드에 10개씩 띄우면 범례가
+ * 그림보다 커지고 무엇을 보라는 것인지 알 수 없다. 전체 보기 탭의 기존 트렌드
+ * 차트는 손대지 않으므로 거기서는 종전대로 전부 보인다. */
 const CHART_SPECS = {
   hysteresis: {
-    // 속도지령 궤적은 A안·B안이 공유한다(실행이 한 번뿐이므로) — 그래서 한 줄만
-    // 그리고, 우축의 운전 대수 계단만 두 줄로 갈린다. 같은 입력에 판정 규칙만
-    // 다르게 씌웠다는 이 모드의 성격이 그림에 그대로 드러난다.
-    xTitle: '시뮬레이션 시간 (s)', yTitle: '펌프 속도지령 (%)', y1Title: '운전 대수',
+    // 히스테리시스는 온도가 아니라 속도지령과 투입 대수에서 나타나는 현상이다.
+    // 속도지령 궤적은 A·B가 공유하므로 한 줄만 그리고(실행이 한 번뿐이다),
+    // 갈라지는 것은 우축의 투입 대수 계단뿐이다.
+    xTitle: '시뮬레이션 시간 (s)', yTitle: '펌프 속도지령 (%)', y1Title: '투입 대수',
     build: (a, b, c, labels, extra) => [
-      { label: '속도지령 (A·B 공통)', data: a.trace.speedCmd, borderColor: c.B, yAxisID: 'y', ...LINE.main },
-      { label: `증속 임계 ${extra.upPct}%`, data: labels.map(() => extra.upPct),
+      { label: '속도지령', data: a.trace.speedCmd, borderColor: c.neutral, yAxisID: 'y', ...LINE.sub },
+      { label: `투입 임계 ${extra.upPct}% (15초 유지)`, data: labels.map(() => extra.upPct),
         borderColor: c.ref, yAxisID: 'y', ...LINE.ref },
-      { label: `해제 임계 ${extra.downPct}%`, data: labels.map(() => extra.downPct),
+      { label: `해제 임계 ${extra.downPct}% (30초 유지)`, data: labels.map(() => extra.downPct),
         borderColor: c.ref, yAxisID: 'y', ...LINE.ref },
-      { label: `A · ${a.label} — 운전 대수`, data: a.trace.count, borderColor: c.A,
-        yAxisID: 'y1', pointRadius: 0, borderWidth: 2, stepped: true },
-      { label: `B · ${b.label} — 운전 대수`, data: b.trace.count, borderColor: c.B,
-        yAxisID: 'y1', pointRadius: 0, borderWidth: 2, borderDash: [5, 3], stepped: true },
+      { label: 'A · 히스테리시스 적용 — 투입 대수', data: a.trace.count, borderColor: c.A, yAxisID: 'y1', ...LINE.step },
+      { label: 'B · 히스테리시스 없음 — 투입 대수', data: b.trace.count, borderColor: c.B, yAxisID: 'y1', ...LINE.stepDash },
     ],
   },
   antiwindup: {
     xTitle: '시뮬레이션 시간 (s)', yTitle: '공급온도 (°C)', y1Title: '외부루프 적분항',
-    build: (a, b, c, labels, extra) => [
-      { label: `A · ${a.label} — 공급온도`, data: a.trace.temp, borderColor: c.A, yAxisID: 'y', ...LINE.main },
-      { label: `B · ${b.label} — 공급온도`, data: b.trace.temp, borderColor: c.B, yAxisID: 'y', ...LINE.mainDash },
-      { label: 'A · 외부루프 적분항', data: a.trace.integral, borderColor: c.A, yAxisID: 'y1', ...LINE.sub },
-      { label: 'B · 외부루프 적분항', data: b.trace.integral, borderColor: c.B, yAxisID: 'y1', ...LINE.sub },
+    build: (a, b, c, labels) => [
+      { label: 'A · anti-windup ON — 공급온도', data: a.trace.temp, borderColor: c.A, yAxisID: 'y', ...LINE.main },
+      { label: 'B · anti-windup OFF — 공급온도', data: b.trace.temp, borderColor: c.B, yAxisID: 'y', ...LINE.mainDash },
       { label: 'SP', data: labels.map(() => a.meta.sp), borderColor: c.ref, yAxisID: 'y', ...LINE.ref },
+      { label: 'A · 적분항', data: a.trace.integral, borderColor: c.A, yAxisID: 'y1', ...LINE.sub },
+      { label: 'B · 적분항', data: b.trace.integral, borderColor: c.B, yAxisID: 'y1', ...LINE.subDash },
     ],
   },
   cascade: {
     xTitle: '시뮬레이션 시간 (s)', yTitle: '공급온도 (°C)', y1Title: '유량 SP (m³/h)',
-    build: (a, b, c, labels, extra) => [
-      { label: `A · ${a.label} — 공급온도`, data: a.trace.temp, borderColor: c.A, yAxisID: 'y', ...LINE.main },
-      { label: `B · ${b.label} — 공급온도`, data: b.trace.temp, borderColor: c.B, yAxisID: 'y', ...LINE.mainDash },
-      { label: 'A · 유량 SP', data: a.trace.flowSp, borderColor: c.A, yAxisID: 'y1', ...LINE.sub },
-      { label: 'B · 유량 SP', data: b.trace.flowSp, borderColor: c.B, yAxisID: 'y1', ...LINE.sub },
+    build: (a, b, c, labels) => [
+      { label: 'A · 캐스케이드 — 공급온도', data: a.trace.temp, borderColor: c.A, yAxisID: 'y', ...LINE.main },
+      { label: 'B · 단일루프 — 공급온도', data: b.trace.temp, borderColor: c.B, yAxisID: 'y', ...LINE.mainDash },
       { label: 'SP', data: labels.map(() => a.meta.sp), borderColor: c.ref, yAxisID: 'y', ...LINE.ref },
+      { label: 'A · 유량 SP', data: a.trace.flowSp, borderColor: c.A, yAxisID: 'y1', ...LINE.sub },
+      { label: 'B · 유량 SP', data: b.trace.flowSp, borderColor: c.B, yAxisID: 'y1', ...LINE.subDash },
     ],
   },
   interlock: {
-    // 5ms 해상도 파형이라 시간축 단위가 다르지만, 축 제목 위치와 범례 규칙은
-    // 다른 모드와 동일하게 유지한다.
-    xTitle: '기동 후 경과 시간 (s)', yTitle: '모선전압 (%)', y1Title: null,
-    build: (a, b, c, labels, extra) => [
-      { label: `A · ${a.label}`, data: a.trace.volt, borderColor: c.A, yAxisID: 'y', ...LINE.main },
-      { label: `B · ${b.label}`, data: b.trace.volt, borderColor: c.B, yAxisID: 'y', ...LINE.mainDash },
-      { label: `관리한계 ${extra.floorPct}%`, data: labels.map(() => extra.floorPct),
-        borderColor: c.ref, yAxisID: 'y', ...LINE.ref },
-    ],
+    xTitle: '기동 후 경과 시간 (s)', yTitle: '모선전압 (%)', y1Title: '기동전류 (%FLA)',
+    build: (a, b, c, labels, extra) => {
+      const ds = [
+        { label: 'A · 인터록 준수 — 모선전압', data: a.trace.volt, borderColor: c.A, yAxisID: 'y', ...LINE.main },
+        { label: 'B · 인터록 우회 — 모선전압', data: b.trace.volt, borderColor: c.B, yAxisID: 'y', ...LINE.mainDash },
+        { label: `관리한계 ${extra.floorPct}%`, data: labels.map(() => extra.floorPct),
+          borderColor: c.ref, yAxisID: 'y', ...LINE.ref },
+        { label: 'A · 기동전류', data: a.trace.curr, borderColor: c.A, yAxisID: 'y1', ...LINE.sub },
+        { label: 'B · 기동전류', data: b.trace.curr, borderColor: c.B, yAxisID: 'y1', ...LINE.subDash },
+      ];
+      // ESS 투입 시점은 수직 마커로 — 시각 하나짜리 값이라 선으로 그릴 수 없다.
+      // x는 기동 시작을 0으로 둔 경과시간이다(시뮬레이션 절대시각이 아니다).
+      if (extra.essB != null) {
+        const xi = nearestIndex(a.trace.t, extra.essB);
+        ds.push({ label: `B · ESS 투입 (기동 후 ${extra.essB.toFixed(3)}s)`,
+          data: labels.map((_, i) => (i === xi ? 100 : null)), borderColor: c.B,
+          pointRadius: labels.map((_, i) => (i === xi ? 5 : 0)), pointStyle: 'triangle',
+          yAxisID: 'y', borderWidth: 0, showLine: false, spanGaps: false });
+      }
+      return ds;
+    },
   },
   failover: {
     // 이 모드의 그림은 속도다 — 대조군은 3대가 같은 속도라 한 줄로 겹쳐 보이고,
-    // 절체 후에는 100% 고정 1대와 낮아진 2대로 갈라진다. 온도는 두 실행이
-    // 겹쳐 보이는 것 자체가 "절체가 온도에 영향을 주지 않았다"의 증거라 함께 얹는다.
-    xTitle: '시뮬레이션 시간 (s)', yTitle: '펌프 속도 (%)', y1Title: '공급온도 (°C)',
-    build: (a, b, c, labels, extra) => {
+    // 절체 후에는 100% 고정 1대(BYPASS)와 낮아진 2대로 갈라진다.
+    xTitle: '시뮬레이션 시간 (s)', yTitle: '펌프 속도 (%)', y1Title: null,
+    build: (a, b, c) => {
       const ds = [];
-      [0, 1, 2].forEach(i => {
-        ds.push({ label: `A · P-${i + 1} 속도`, data: a.trace.speeds[i], borderColor: c.A,
-                  yAxisID: 'y', ...LINE.main });
-      });
-      [0, 1, 2].forEach(i => {
-        ds.push({ label: `B · P-${i + 1} 속도`, data: b.trace.speeds[i], borderColor: c.B,
-                  yAxisID: 'y', ...LINE.mainDash });
-      });
-      ds.push(
-        { label: 'A · 공급온도', data: a.trace.temp, borderColor: c.A, yAxisID: 'y1', ...LINE.sub },
-        { label: 'B · 공급온도', data: b.trace.temp, borderColor: c.B, yAxisID: 'y1', ...LINE.sub },
-      );
+      [0, 1, 2].forEach(i => ds.push({ label: `A · P-${i + 1} (VFD)`, data: a.trace.speeds[i],
+        borderColor: c.A, yAxisID: 'y', ...LINE.main }));
+      [0, 1, 2].forEach(i => ds.push({ label: `B · P-${i + 1} (${b.trace.feedModes[i]})`, data: b.trace.speeds[i],
+        borderColor: c.B, yAxisID: 'y', ...LINE.mainDash }));
       return ds;
     },
   },
   sensor: {
-    // 열화 케이스는 참값과 측정값이 벌어지고 대조군은 겹친다. 우축의 편차선이
-    // 그 벌어짐을 한 줄로 요약한다.
+    // 열화 쪽은 참값과 측정값이 벌어지고, 우축의 편차선이 그 벌어짐을 요약한다.
     xTitle: '시뮬레이션 시간 (s)', yTitle: '공급온도 (°C)', y1Title: '참값 − 측정값 편차 (°C)',
     build: (a, b, c, labels, extra) => {
       const dev = (run) => run.trace.trueV.map((v, i) => Math.abs(v - run.trace.measV[i]));
       return [
-        { label: `B · ${b.label} — 참값`, data: b.trace.trueV, borderColor: c.B, yAxisID: 'y', ...LINE.main },
-        { label: `B · ${b.label} — 측정값`, data: b.trace.measV, borderColor: c.B, yAxisID: 'y', ...LINE.mainDash },
-        { label: `A · ${a.label} — 참값`, data: a.trace.trueV, borderColor: c.A, yAxisID: 'y', ...LINE.main },
-        { label: `A · ${a.label} — 측정값`, data: a.trace.measV, borderColor: c.A, yAxisID: 'y', ...LINE.mainDash },
-        { label: 'B · 편차', data: dev(b), borderColor: c.B, yAxisID: 'y1', ...LINE.sub },
-        { label: 'A · 편차', data: dev(a), borderColor: c.A, yAxisID: 'y1', ...LINE.sub },
+        { label: 'B · 열화 센서 — 참값', data: b.trace.trueV, borderColor: c.B, yAxisID: 'y', ...LINE.main },
+        { label: 'B · 열화 센서 — 측정값', data: b.trace.measV, borderColor: c.B, yAxisID: 'y', ...LINE.mainDash },
+        { label: 'A · 열화 없음 — 편차', data: dev(a), borderColor: c.A, yAxisID: 'y1', ...LINE.sub },
+        { label: 'B · 열화 센서 — 편차', data: dev(b), borderColor: c.B, yAxisID: 'y1', ...LINE.subDash },
         { label: `판정 임계 ${extra.thresholdC ?? 1.0}°C`, data: labels.map(() => extra.thresholdC ?? 1.0),
           borderColor: c.ref, yAxisID: 'y1', ...LINE.ref },
       ];
     },
   },
 };
+
+function nearestIndex(arr, target) {
+  let best = 0, bestD = Infinity;
+  for (let i = 0; i < arr.length; i++) {
+    const d = Math.abs(arr[i] - target);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
 
 function drawChart(result) {
   const canvas = document.getElementById('benchChart');
@@ -700,10 +808,13 @@ function drawChart(result) {
 
   const [a, b] = result.runs;
   const labels = a.trace.t.map(t => t.toFixed(0));
+  // A안=밝은 시안 실선, B안=주황 파선으로 6개 모드 전부 고정한다.
+  // neutral은 A·B가 공유하는 계열(히스테리시스의 속도지령)에만 쓴다.
   const c = {
-    A: token('--hmi-trace-a', '#8f9dad'),
-    B: token('--hmi-trace-b', '#e8eef5'),
-    ref: token('--hmi-g3', '#25313f'),
+    A: token('--hmi-trace-a', '#22d3ee'),
+    B: token('--hmi-trace-b', '#f97316'),
+    ref: token('--hmi-g4', '#748094'),
+    neutral: token('--hmi-g5', '#c9d6e3'),
   };
   const axisColor = token('--hmi-g4', '#748094'), gridColor = '#1c2532';
 

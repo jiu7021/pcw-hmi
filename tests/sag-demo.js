@@ -36,9 +36,11 @@ function runCase(pumps, ticks) {
   const pq = PQLayer.createPQState();
   const dt = 0.1;
   let t = 0;
-  let minV = 1.0, essOnV = null;
-  // trace: 화면(학습 모드 인터록 탭)이 전압 파형을 그리기 위한 기록. 계산에는
-  // 전혀 관여하지 않는 순수 관측용 추가이므로 minV/essOnV 값은 달라지지 않는다.
+  let minV = 1.0, essOnV = null, essOnAtS = null;
+  // trace: 화면(학습 모드 인터록 탭)이 전압·전류 파형을 그리기 위한 기록.
+  // 계산에는 전혀 관여하지 않는 순수 관측용 추가이므로 minV/essOnV 값은
+  // 달라지지 않는다. essOnAtS는 "기동 시작 후 몇 초에 ESS가 붙었는가"이며,
+  // 이 함수의 t가 0에서 시작하므로 그대로 경과시간이다(절대시각이 아니다).
   const trace = [];
   for (let i = 0; i < ticks; i++) {
     const prevStartTimers = pumps.map(p => p.startTimer);
@@ -47,13 +49,14 @@ function runCase(pumps, ticks) {
     const { samples } = ElecLayer.updateFast(es, pumps, prevStartTimers, dt);
     const tStart = t - dt;
     samples.forEach(s => {
-      PQLayer.updateSubstep(pq, s.busVoltagePu, tStart + s.tOffsetS, () => PQLayer.classifyCause(es));
+      const tAbs = tStart + s.tOffsetS;
+      PQLayer.updateSubstep(pq, s.busVoltagePu, tAbs, () => PQLayer.classifyCause(es));
       if (s.busVoltagePu < minV) minV = s.busVoltagePu;
-      if (pq.essActive && essOnV === null) essOnV = pq.fastVoltagePu;
-      trace.push({ t: tStart + s.tOffsetS, vPu: s.busVoltagePu });
+      if (pq.essActive && essOnV === null) { essOnV = pq.fastVoltagePu; essOnAtS = tAbs; }
+      trace.push({ t: tAbs, vPu: s.busVoltagePu, iPu: s.totalCurrentPu });
     });
   }
-  return { minV, essOnV, trace };
+  return { minV, essOnV, essOnAtS, trace };
 }
 
 function runInterlockBypassDemo() {
@@ -64,7 +67,8 @@ function runInterlockBypassDemo() {
     { id: 2, status: 'RUNNING', speedPct: 100, fault: false, startTimer: 0, feedMode: 'VFD' },
     { id: 3, status: 'RUNNING', speedPct: 100, fault: false, startTimer: 0, feedMode: 'VFD' },
   ];
-  const { minV: minVA } = runCase(pumpsA, 50);
+  const caseA = runCase(pumpsA, 50);
+  const minVA = caseA.minV;
 
   // 케이스 B(인터록 우회 가정): VFD 1대 운전 중 나머지 2대가 "동시에"
   // 바이패스(DOL)로 STARTING — 예: 2대가 동시에 VFD 고장이 나서 동시에
@@ -76,13 +80,18 @@ function runInterlockBypassDemo() {
     { id: 2, status: 'STARTING', speedPct: 0, fault: false, startTimer: 0, feedMode: 'BYPASS' },
     { id: 3, status: 'RUNNING', speedPct: 100, fault: false, startTimer: 0, feedMode: 'VFD' },
   ];
-  const { minV: minVB, essOnV: essOnVB } = runCase(pumpsB, 50);
+  const caseB = runCase(pumpsB, 50);
+  const minVB = caseB.minV, essOnVB = caseB.essOnV;
 
   const floor = PQLayer.CONST.VOLTAGE_MANAGEMENT_FLOOR_PU;
   return {
     floorPct: floor * 100,
-    normalCase: { minVoltagePct: minVA * 100, breachesFloor: minVA < floor },
-    bypassCase: { minVoltagePct: minVB * 100, breachesFloor: minVB < floor, essEngagedAtPct: essOnVB !== null ? essOnVB * 100 : null },
+    // peakCurrentPct/essEngagedAtS는 화면(학습 모드)이 쓰는 관측값이다.
+    // essEngagedAtS는 기동 시작을 0으로 둔 경과시간이다(시뮬레이션 절대시각 아님).
+    normalCase: { minVoltagePct: minVA * 100, breachesFloor: minVA < floor,
+      peakCurrentPct: Math.max(...caseA.trace.map(p => p.iPu)) * 100, essEngagedAtS: caseA.essOnAtS },
+    bypassCase: { minVoltagePct: minVB * 100, breachesFloor: minVB < floor, essEngagedAtPct: essOnVB !== null ? essOnVB * 100 : null,
+      peakCurrentPct: Math.max(...caseB.trace.map(p => p.iPu)) * 100, essEngagedAtS: caseB.essOnAtS },
     demonstratesInterlockNecessity: (minVA >= floor) && (minVB < floor),
   };
 }

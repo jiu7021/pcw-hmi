@@ -1,3 +1,3 @@
-case,minVoltagePct,floorPct,breachesFloor,essEngagedAtPct
-normal_single_start,88.08,85,false,
-bypass_simultaneous_start,80.67,85,true,81.78
+case,minVoltagePct,floorPct,breachesFloor,peakCurrentPct,essEngagedAtS,essEngagedAtPct
+normal_single_start,88.08,85,false,794,0.03,
+bypass_simultaneous_start,80.67,85,true,1289,0.025,81.78

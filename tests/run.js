@@ -369,8 +369,10 @@ writeCSV('sag_stats.csv', sagStatsRows);
 writeCSV('drift_blind_spot.csv', driftBlindSpotRows);
 writeCSV('bypass_changeover.csv', changeoverRows);
 writeCSV('interlock_bypass_demo.csv', [
-  { case: 'normal_single_start', minVoltagePct: +bypassDemo.normalCase.minVoltagePct.toFixed(2), floorPct: bypassDemo.floorPct, breachesFloor: bypassDemo.normalCase.breachesFloor },
-  { case: 'bypass_simultaneous_start', minVoltagePct: +bypassDemo.bypassCase.minVoltagePct.toFixed(2), floorPct: bypassDemo.floorPct, breachesFloor: bypassDemo.bypassCase.breachesFloor, essEngagedAtPct: bypassDemo.bypassCase.essEngagedAtPct == null ? null : +bypassDemo.bypassCase.essEngagedAtPct.toFixed(2) },
+  { case: 'normal_single_start', minVoltagePct: +bypassDemo.normalCase.minVoltagePct.toFixed(2), floorPct: bypassDemo.floorPct, breachesFloor: bypassDemo.normalCase.breachesFloor,
+    peakCurrentPct: +bypassDemo.normalCase.peakCurrentPct.toFixed(0), essEngagedAtS: bypassDemo.normalCase.essEngagedAtS },
+  { case: 'bypass_simultaneous_start', minVoltagePct: +bypassDemo.bypassCase.minVoltagePct.toFixed(2), floorPct: bypassDemo.floorPct, breachesFloor: bypassDemo.bypassCase.breachesFloor, essEngagedAtPct: bypassDemo.bypassCase.essEngagedAtPct == null ? null : +bypassDemo.bypassCase.essEngagedAtPct.toFixed(2),
+    peakCurrentPct: +bypassDemo.bypassCase.peakCurrentPct.toFixed(0), essEngagedAtS: bypassDemo.bypassCase.essEngagedAtS },
 ]);
 // 위반이 없어도 항상 갱신한다 — 그렇지 않으면 과거 실패 실행의 잔재 파일이
 // 남아 "지금도 실패 중"인 것처럼 보이는 오해를 일으킨다.
