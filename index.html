@@ -185,14 +185,27 @@ table.alarms button{padding:2px 8px;font-size:10px;}
 /* 학습 모드에서는 제목을 새 헤더가 맡으므로 남은 시계·배속만 오른쪽 정렬 */
 .topbar.hmi-compact{justify-content:flex-end;gap:var(--hmi-s3);}
 
-#benchBar{display:flex;align-items:center;gap:var(--hmi-s3);flex-wrap:wrap;margin-bottom:var(--hmi-s3);}
+/* 실행 줄과 파라미터 줄을 나눈다. 파라미터가 버튼과 같은 줄에 있으면 모드마다
+   컨트롤 개수가 달라 카드 높이가 60~135px로 들쭉날쭉해지고, 탭을 옮길 때마다
+   아래 내용이 위아래로 움직인다. 파라미터 줄은 컨트롤이 없는 모드에서도
+   자리를 그대로 비워둔다(min-height) — 그래야 5개 모드의 카드 높이가 같다. */
+#benchBar{display:flex;align-items:center;gap:var(--hmi-s3);flex-wrap:wrap;
+  min-height:32px;margin-bottom:var(--hmi-s2);}
 #btnRunBench{background:var(--hmi-g2);border:1px solid var(--hmi-g4);color:var(--hmi-g5);
   border-radius:var(--hmi-radius);padding:var(--hmi-s2) var(--hmi-s4);font-size:var(--hmi-fs-body);font-weight:700;}
 #btnRunBench:hover:not(:disabled){border-color:var(--hmi-g5);}
 #benchStatus{font-family:var(--hmi-mono);font-size:var(--hmi-fs-label);color:var(--hmi-g4);}
 /* 모드별 파라미터 — 모드를 옮겨도 자리와 높이가 흔들리지 않도록 항상 같은
    줄(#benchBar) 안에 두고, 쓸 컨트롤이 없는 모드에서는 비워만 둔다. */
-#benchParams{display:flex;gap:var(--hmi-s3);align-items:center;flex-wrap:wrap;}
+/* 줄바꿈 대신 가로 스크롤 — 컨트롤이 2개든 없든 항상 한 줄 높이라 모드를
+   옮겨도 카드 높이가 같다(모드 탭과 같은 방식). */
+#benchParams{display:flex;gap:var(--hmi-s3);align-items:center;flex-wrap:nowrap;
+  overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;
+  min-height:30px;margin-bottom:var(--hmi-s3);}
+#benchParams::-webkit-scrollbar{display:none;}
+#benchParams .grp{flex:0 0 auto;}
+#benchParams .lbl{white-space:nowrap;}
+#benchParams .seg button{white-space:nowrap;}
 #benchParams .grp{display:flex;align-items:center;gap:var(--hmi-s1);}
 #benchParams .lbl{font-size:var(--hmi-fs-label);color:var(--hmi-g4);text-transform:uppercase;letter-spacing:.04em;}
 #benchParams .seg{display:flex;border:1px solid var(--hmi-g3);border-radius:var(--hmi-radius);overflow:hidden;}
@@ -251,9 +264,9 @@ table.hmi-result td.metric{color:var(--hmi-g4);}
     <h2>A/B 비교</h2>
     <div id="benchBar">
       <button id="btnRunBench">비교 실행</button>
-      <div id="benchParams"></div>
       <span id="benchStatus">비교 실행을 누르면 A안과 B안을 순차로 실행합니다.</span>
     </div>
+    <div id="benchParams"></div>
     <div class="bench-chart"><canvas id="benchChart"></canvas></div>
     <div id="benchResult"></div>
   </section>

@@ -55,7 +55,7 @@ const MODES = [
   { id: 'cascade', label: '캐스케이드 vs 단일루프', impl: true, panels: ['trend', 'tuning', 'operate', 'automeasure'] },
   { id: 'interlock', label: '인터록', impl: true, panels: ['pid', 'electrical', 'pq', 'runtime'] },
   { id: 'failover', label: '보호·절체', impl: true, panels: ['pid', 'fault', 'electrical', 'runtime', 'alarms'] },
-  { id: 'sensor', label: '센서 열화', impl: false },
+  { id: 'sensor', label: '센서 열화', impl: true, panels: ['sensors', 'trend', 'alarms'] },
   { id: 'full', label: '전체 보기', impl: true, panels: ALL_PANEL_KEYS },
 ];
 const DEFAULT_MODE = 'antiwindup';
@@ -75,6 +75,10 @@ const MODE_PARAMS = {
       options: [{ v: 2, t: '2대' }, { v: 3, t: '3대' }] },
     { key: 'feedMode', label: '급전모드',
       options: [{ v: 'BYPASS', t: '바이패스 (DOL)' }, { v: 'VFD', t: 'VFD 소프트스타트' }] },
+  ],
+  sensor: [
+    { key: 'degradationLevel', label: '열화 수준',
+      options: [{ v: 1.0, t: '100 %' }, { v: 0.5, t: '50 %' }, { v: 0.25, t: '25 %' }] },
   ],
 };
 const modeParamState = {}; // { modeId: { key: value } }
@@ -254,6 +258,41 @@ const DOCS = {
       <p><b>보호 리셋은 자동이 아니다.</b> 결상·과부하 트립은 원인이 살아 있으면 리셋이 거부된다.
       원인 미해소 상태에서 리셋을 허용하면 재기동 즉시 다시 트립되거나 위험한 상태로 운전이
       계속되기 때문이며, 왼쪽 전기 계통 패널에서 직접 확인할 수 있다.</p>`,
+  },
+
+  sensor: {
+    what: `센서 진단은 보통 세 가지를 본다 — 범위이탈(값이 계측범위를 벗어남), 값고착(값이 전혀 안 움직임),
+      정합성 모순(다른 신호와 앞뒤가 안 맞음). 셋 다 <b>"값이 튀는 것"</b>을 잡는 진단이다.
+      그런데 실제 현장에서 흔한 열화는 값이 튀지 않고 <b>서서히 어긋나는 오프셋 드리프트</b>다.
+      측정값은 계속 정상 범위 안에 있고, 계속 움직이고, 다른 신호와도 모순되지 않는다.
+      아래 비교는 공급온도 센서를 열화시킨 1시간 실행과 열화 없는 대조군을 나란히 놓는다.
+      차트에서 열화 쪽은 참값선과 측정값선이 벌어지는데, <b>그동안 알람은 하나도 뜨지 않는다.</b>`,
+    detail: `
+      <table>
+        <tr><th>항목</th><th>값</th><th>근거</th></tr>
+        <tr><td>실행 시간</td><td>3600 초 (1시간)</td><td>시나리오 I, 시드 9001</td></tr>
+        <tr><td>부하</td><td>2200 kW 고정 (<code>LOAD_MED_KW</code>)</td><td>드리프트만 분리해 보려고 부하를 고정</td></tr>
+        <tr><td>편차 판정 임계</td><td>1.0 °C</td><td>가정치 — "이 정도 어긋나면 실무에서 문제가 될 만하다"는 대표 폭, 명확한 산업표준은 없다</td></tr>
+        <tr><td>대조군</td><td>동일 조건, 열화만 제거</td><td>시나리오 I-control</td></tr>
+      </table>
+      <p><b>주지표를 최종 편차로 잡은 이유 — 미검출 구간 지표의 한계.</b> 원래 이 시나리오의 지표는
+      "미검출 구간"(편차가 임계를 처음 넘은 시각부터 진단이 발동할 때까지)이었다. 그런데 그 값이
+      열화 100%와 대조군에서 <b>둘 다 3596.6초로 똑같이</b> 나온다. 기동 직후 22 °C에서 21 °C로
+      냉각되는 과도구간에서는 열화가 전혀 없어도 센서 응답지연만으로 편차가 임계를 넘기 때문이다
+      (대조군 실측: t=3.4초에 1.0 °C 초과, 최대 4.357 °C @6.1초, 마지막 초과 71.9초). 즉 이 지표는
+      "최초 시각" 하나에 좌우돼 열화 유무를 구분하지 못한다.</p>
+      <p>과도구간을 잘라내는 컷오프 시각을 두는 방법도 있지만, "왜 하필 그 시각인가"라는 임의성이
+      생기고 기동 과도 길이가 바뀌면 또 흔들린다. 그래서 컷오프가 필요 없는 두 지표를 쓴다 —
+      <b>최종 편차</b>(주지표)와 <b>편차 1.0 °C 초과 샘플 비율</b>(보조). 후자는 기동 과도가 전체의
+      1% 남짓이라 자연히 묻히고 지속적인 드리프트만 비율로 남는다. 원 지표도 표에 그대로 남겨두었다 —
+      <b>이 지표가 A/B를 구분하지 못한다는 사실 자체가 이 모드에서 볼 것</b>이기 때문이다. 지표를
+      잘못 고르면 "측정했다"는 사실만 남고 아무것도 판별하지 못한다.</p>
+      <p><b>이 사각지대는 의도적으로 만든 것이다.</b> 드리프트를 검출하는 진단(예: 다중 센서 교차
+      비교, 장기 추세 감시)을 넣지 않은 상태를 그대로 보여주는 것이 목적이다. 알람이 전부 정상이라는
+      것이 측정값이 맞다는 뜻은 아니며, 이 화면은 그 간극을 눈으로 확인하는 자리다
+      (<code>sim-sensors.js</code> 상단 주석 참조).</p>
+      <p><b>실행에 1~2초 걸린다.</b> 1시간 시뮬레이션을 A안·B안 두 번 돌리므로 다른 모드보다 오래
+      걸린다(다른 모드는 100 ms 안팎).</p>`,
   },
 };
 
@@ -573,6 +612,24 @@ const CHART_SPECS = {
         { label: 'B · 공급온도', data: b.trace.temp, borderColor: c.B, yAxisID: 'y1', ...LINE.sub },
       );
       return ds;
+    },
+  },
+  sensor: {
+    // 열화 케이스는 참값과 측정값이 벌어지고 대조군은 겹친다. 우축의 편차선이
+    // 그 벌어짐을 한 줄로 요약한다.
+    xTitle: '시뮬레이션 시간 (s)', yTitle: '공급온도 (°C)', y1Title: '참값 − 측정값 편차 (°C)',
+    build: (a, b, c, labels, extra) => {
+      const dev = (run) => run.trace.trueV.map((v, i) => Math.abs(v - run.trace.measV[i]));
+      return [
+        { label: `B · ${b.label} — 참값`, data: b.trace.trueV, borderColor: c.B, yAxisID: 'y', ...LINE.main },
+        { label: `B · ${b.label} — 측정값`, data: b.trace.measV, borderColor: c.B, yAxisID: 'y', ...LINE.mainDash },
+        { label: `A · ${a.label} — 참값`, data: a.trace.trueV, borderColor: c.A, yAxisID: 'y', ...LINE.main },
+        { label: `A · ${a.label} — 측정값`, data: a.trace.measV, borderColor: c.A, yAxisID: 'y', ...LINE.mainDash },
+        { label: 'B · 편차', data: dev(b), borderColor: c.B, yAxisID: 'y1', ...LINE.sub },
+        { label: 'A · 편차', data: dev(a), borderColor: c.A, yAxisID: 'y1', ...LINE.sub },
+        { label: `판정 임계 ${extra.thresholdC ?? 1.0}°C`, data: labels.map(() => extra.thresholdC ?? 1.0),
+          borderColor: c.ref, yAxisID: 'y1', ...LINE.ref },
+      ];
     },
   },
 };

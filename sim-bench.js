@@ -421,6 +421,7 @@ function runSensor(params) {
   return {
     modeId: 'sensor',
     runs,
+    extra: { thresholdC: degraded.meta.thresholdC, durationS: degraded.meta.durationS },
     rows: [
       // 주지표 — 컷오프 없이 열화 유무를 갈라준다.
       row('참값 대비 최종 편차', '°C', 3, clean, degraded, 'finalDeviationC', BASELINE.sensor),
