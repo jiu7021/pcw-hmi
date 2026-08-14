@@ -126,6 +126,47 @@ function runOneScenario(scn) {
 console.log('=== 1/3 시나리오 A~F 실행 ===');
 const scenarioResults = scenarios.allScenarios().map(runOneScenario);
 
+/* ---------------------------- 1b) 대수제어 정책 역산 ----------------------------
+ * 히스테리시스 밴드와 확인지연이 실제로 얼마나 억제하고 있는지를, 같은 속도지령
+ * 궤적에 정책만 바꿔 덧씌워 센다. 실제 실행 비교가 아니라 후처리 역산이라는 점은
+ * metrics.js computeStagingCounterfactual 주석 참조. */
+console.log('\n=== 1b/3 대수제어 정책 역산 (히스테리시스·지연 기여도) ===');
+const stagingCounterfactualRows = [];
+const CF_POLICIES = [
+  { key: 'actual_policy', label: '실제 정책(밴드+지연)', upPct: SimCore.CONST.STAGE_UP_SPEED_PCT, downPct: SimCore.CONST.STAGE_DOWN_SPEED_PCT, upDelay: SimCore.CONST.STAGE_UP_DELAY_S, downDelay: SimCore.CONST.STAGE_DOWN_DELAY_S },
+  { key: 'no_delay', label: '지연 제거(밴드만)', upPct: SimCore.CONST.STAGE_UP_SPEED_PCT, downPct: SimCore.CONST.STAGE_DOWN_SPEED_PCT, upDelay: 0, downDelay: 0 },
+  // 밴드 제거 = 증속 임계 하나로 투입·해제를 모두 판정(단일 임계). 임계값을
+  // 새로 지어내지 않으려고 기존 STAGE_UP_SPEED_PCT를 그대로 쓴다.
+  { key: 'no_band', label: '밴드 제거(지연만)', upPct: SimCore.CONST.STAGE_UP_SPEED_PCT, downPct: SimCore.CONST.STAGE_UP_SPEED_PCT, upDelay: SimCore.CONST.STAGE_UP_DELAY_S, downDelay: SimCore.CONST.STAGE_DOWN_DELAY_S },
+  { key: 'none', label: '밴드·지연 모두 제거', upPct: SimCore.CONST.STAGE_UP_SPEED_PCT, downPct: SimCore.CONST.STAGE_UP_SPEED_PCT, upDelay: 0, downDelay: 0 },
+];
+for (const { scn, result } of scenarioResults) {
+  if (!['A_normal_load_cycle', 'B_load_step', 'F_staging_boundary_oscillation'].includes(scn.name)) continue;
+  const actualToggles = metrics.countStagingTogglesExcludingStartup(result.runningCountSeries);
+  const line = [];
+  for (const pol of CF_POLICIES) {
+    const cf = metrics.computeStagingCounterfactual(result.trendSeries, pol);
+    stagingCounterfactualRows.push({
+      scenario: scn.name, durationS: scn.durationS, policy: pol.key, policyLabel: pol.label,
+      upPct: pol.upPct, downPct: pol.downPct, upDelayS: pol.upDelay, downDelayS: pol.downDelay,
+      toggles: cf.toggles, togglesPerMin: +cf.perMin.toFixed(3),
+      actualTogglesExclStartup: actualToggles,
+      // 실제와 동일한 정책으로 역산했을 때 실제값이 재현되는지 — 역산 방법 자체의
+      // 타당성 점검이다. 여기가 false면 역산 결과 전부를 믿을 수 없다.
+      reproducesActual: pol.key === 'actual_policy' ? (cf.toggles === actualToggles) : '',
+    });
+    line.push(`${pol.label} ${cf.toggles}회`);
+  }
+  console.log(`  [${scn.name}] 실제(초기기동 제외) ${actualToggles}회 — ` + line.join(' / '));
+}
+writeCSV('staging_counterfactual.csv', stagingCounterfactualRows);
+const cfSelfCheckFail = stagingCounterfactualRows.filter(r => r.policy === 'actual_policy' && r.reproducesActual !== true);
+if (cfSelfCheckFail.length) {
+  console.log(`  ⚠ 역산 타당성 점검 실패 ${cfSelfCheckFail.length}건 — 동일 정책인데 실제 토글 수를 재현하지 못했다.`);
+} else {
+  console.log('  → 역산 타당성 점검 통과: 동일 정책으로 역산하면 실제 토글 수를 그대로 재현한다.');
+}
+
 /* ---------------------------- 2) 게인 배치 시험 (시나리오 B, 캐스케이드) ---------------------------- */
 console.log('\n=== 2/3 게인 배치 시험 (시나리오 B × 게인 4세트) ===');
 const gainSweepRows = [];

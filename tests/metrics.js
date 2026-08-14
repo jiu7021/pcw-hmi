@@ -46,6 +46,64 @@ function computeStagingToggles(runningCountSeries) {
   };
 }
 
+/* ---- 대수제어 정책 역산 (counterfactual) ----
+ * series: [{t, speedCmdPct}] — 실제 실행에서 기록된 속도지령 궤적
+ * policy: {upPct, downPct, upDelay, downDelay, maxPumps}
+ *
+ * 무엇을 계산하는가: "같은 속도지령 궤적에 대해, 대수제어 정책만 다른 것을
+ * 적용했다면 투입/해제를 몇 번 했겠는가"를 센다. 히스테리시스 밴드
+ * (증속 90% / 해제 40%)와 확인지연(15s/30s)이 실제로 얼마나 억제하고 있는지를
+ * 보려는 것이다.
+ *
+ * ★ 이것은 실제 실행 두 번을 비교한 것이 아니다. 히스테리시스를 끈 실행은
+ *   CONST가 Object.freeze라 만들 수 없고, 애초에 정책이 달랐다면 투입 대수가
+ *   달라져 속도지령 궤적 자체도 달라졌을 것이다. 즉 여기서 쓰는 궤적은 이미
+ *   히스테리시스가 적용된 결과물이며, 이 계산은 그 위에 판정 규칙만 바꿔
+ *   덧씌운 근사다. 다른 지표들과 성격이 다르므로 화면에도 그렇게 표시한다.
+ *
+ * 방법의 타당성 점검: 실제와 동일한 정책을 넣어 역산하면 실제 토글 수를 그대로
+ * 재현해야 한다(초기 마스터 기동 1회 제외 — 그건 대수제어가 만든 토글이 아니다).
+ * 실측으로 시나리오 A/B/F 모두 재현되는 것을 확인했다.
+ */
+function computeStagingCounterfactual(series, policy) {
+  const upPct = policy.upPct, downPct = policy.downPct;
+  const upDelay = policy.upDelay ?? 0, downDelay = policy.downDelay ?? 0;
+  const maxPumps = policy.maxPumps ?? 3;
+
+  let n = 1; // 마스터 기동으로 이미 1대가 도는 상태에서 출발
+  let up = 0, down = 0, toggles = 0;
+  let prevT = series.length ? series[0].t : 0;
+  const countSeries = [];
+  for (const p of series) {
+    const dt = p.t - prevT;
+    prevT = p.t;
+    const upCond = p.speedCmdPct >= upPct;
+    const downCond = p.speedCmdPct <= downPct;
+    up = upCond ? up + dt : 0;
+    down = downCond ? down + dt : 0;
+    // 지연이 0이어도 "조건이 참일 때만" 발동해야 한다 — 누적시간만 보고
+    // 판정하면 up>=0이 항상 참이라 조건과 무관하게 매 틱 발동한다.
+    if (upCond && up >= upDelay && n < maxPumps) { n++; toggles++; up = 0; }
+    else if (downCond && down >= downDelay && n > 1) { n--; toggles++; down = 0; }
+    countSeries.push(n);
+  }
+  const durationS = series.length ? series[series.length - 1].t - series[0].t : 0;
+  return { toggles, countSeries, durationS, perMin: durationS > 0 ? toggles / (durationS / 60) : 0 };
+}
+
+// 대수제어가 만든 토글만 센다 — 마스터 기동에 의한 0→1 전이는 대수제어의
+// 판단이 아니므로 역산과 나란히 놓으려면 빼야 한다.
+function countStagingTogglesExcludingStartup(runningCountSeries) {
+  let toggles = 0;
+  for (let i = 1; i < runningCountSeries.length; i++) {
+    const prev = runningCountSeries[i - 1].runningCount, cur = runningCountSeries[i].runningCount;
+    if (prev === cur) continue;
+    if (prev === 0 && cur === 1) continue; // 초기 마스터 기동
+    toggles++;
+  }
+  return toggles;
+}
+
 /* ---- 스텝응답 지표: 오버슈트 / 정착시간 / 정상상태편차 ----
  * series: [{t, v}] (t 오름차순), stepTimeS: 스텝을 준 시각, targetValue: 목표값
  * 정착시간은 통상적인 제어공학 관행(허용오차 밴드, 기본 ±5%)을 기준으로 계산.
@@ -254,6 +312,8 @@ function analyzeAntiWindup(fullSeries, overloadAtS, overloadEndS, spTempC, band,
 
 return {
   computeStagingToggles,
+  computeStagingCounterfactual,
+  countStagingTogglesExcludingStartup,
   analyzeStepResponse,
   analyzeDisturbanceRejection,
   analyzeAntiWindup,

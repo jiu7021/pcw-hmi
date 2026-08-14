@@ -100,6 +100,17 @@ const BASELINE = {
     B: { finalSpeedPct: '100/74.9/74.9', finalFeedModes: 'BYPASS/VFD/VFD', finalErrorC: -0.011, finalFlowM3h: 624.6 },
     source: 'bypass_changeover.csv:2,3',
   },
+  // staging_counterfactual.csv — 시나리오×정책 조합별 토글 수.
+  // 이 값들은 실제 실행 비교가 아니라 궤적 후처리 역산이다(아래 runHysteresis 주석).
+  hysteresis: {
+    F: { actual_policy: { toggles: 2, togglesPerMin: 0.2 }, no_delay: { toggles: 2, togglesPerMin: 0.2 },
+         no_band: { toggles: 4, togglesPerMin: 0.4 }, none: { toggles: 32, togglesPerMin: 3.201 } },
+    A: { actual_policy: { toggles: 2, togglesPerMin: 0.2 }, no_delay: { toggles: 12, togglesPerMin: 1.2 },
+         no_band: { toggles: 4, togglesPerMin: 0.4 }, none: { toggles: 368, togglesPerMin: 36.806 } },
+    B: { actual_policy: { toggles: 3, togglesPerMin: 0.2 }, no_delay: { toggles: 8, togglesPerMin: 0.533 },
+         no_band: { toggles: 6, togglesPerMin: 0.4 }, none: { toggles: 134, togglesPerMin: 8.934 } },
+    source: 'staging_counterfactual.csv',
+  },
   // drift_blind_spot.csv:2,3 (2행=열화 100%, 3행=대조군)
   sensor: {
     A: { finalDeviationC: 0.031, exceededSampleRatioPct: 1.00, blindSpotDurationS: 3596.6 },
@@ -442,6 +453,102 @@ function runSensor(params) {
   };
 }
 
+/* ==================== 모드 6: 대수제어 히스테리시스 ====================
+ * ★ 이 모드만 성격이 다르다. 다른 5개 모드는 조건을 바꿔 실제로 두 번 실행하고
+ *   그 결과를 비교하지만, 여기서는 실행이 한 번뿐이다. 히스테리시스를 끈 실행은
+ *   임계값·지연이 Object.freeze된 CONST에 있어 sim-core를 고치지 않고는 만들 수
+ *   없고, 이 프로젝트는 제어 로직을 건드리지 않는 것이 전제다.
+ *
+ *   대신 한 번 실행해서 얻은 속도지령 궤적에 판정 규칙만 바꿔 덧씌워, "같은
+ *   궤적이었다면 몇 번 투입/해제했겠는가"를 센다(tests/metrics.js
+ *   computeStagingCounterfactual). 실제로 정책이 달랐다면 투입 대수가 달라지고
+ *   따라서 속도지령 궤적 자체도 달라졌을 것이므로, B안의 숫자는 근사다.
+ *   화면의 결과 해석 첫 문장에 이 사실을 그대로 적는다.
+ *
+ *   근사이긴 해도 방법 자체는 점검했다 — 실제와 동일한 정책으로 역산하면 실제
+ *   토글 수가 그대로 재현된다(tests/run.js의 역산 타당성 점검). */
+const CF_POLICIES = {
+  actual_policy: { label: '실제 정책 (밴드 90/40 + 지연 15s/30s)',
+    upPct: SimCore.CONST.STAGE_UP_SPEED_PCT, downPct: SimCore.CONST.STAGE_DOWN_SPEED_PCT,
+    upDelay: SimCore.CONST.STAGE_UP_DELAY_S, downDelay: SimCore.CONST.STAGE_DOWN_DELAY_S },
+  no_delay: { label: '지연 제거 (밴드만)',
+    upPct: SimCore.CONST.STAGE_UP_SPEED_PCT, downPct: SimCore.CONST.STAGE_DOWN_SPEED_PCT,
+    upDelay: 0, downDelay: 0 },
+  // 밴드 제거 = 단일 임계로 투입·해제를 모두 판정. 임계값을 새로 지어내지 않으려고
+  // 기존 STAGE_UP_SPEED_PCT를 그대로 쓴다.
+  no_band: { label: '밴드 제거 (지연만)',
+    upPct: SimCore.CONST.STAGE_UP_SPEED_PCT, downPct: SimCore.CONST.STAGE_UP_SPEED_PCT,
+    upDelay: SimCore.CONST.STAGE_UP_DELAY_S, downDelay: SimCore.CONST.STAGE_DOWN_DELAY_S },
+  none: { label: '밴드·지연 모두 제거',
+    upPct: SimCore.CONST.STAGE_UP_SPEED_PCT, downPct: SimCore.CONST.STAGE_UP_SPEED_PCT,
+    upDelay: 0, downDelay: 0 },
+};
+const CF_SCENARIOS = {
+  F: { key: 'F', make: () => SimTestScenarios.scenarioF(), label: '임계 근처 25s 진동 (적대적)' },
+  A: { key: 'A', make: () => SimTestScenarios.scenarioA(), label: '정상 3단 순환 부하' },
+  B: { key: 'B', make: () => SimTestScenarios.scenarioB({ seed: 2001 }), label: '급격한 부하 스텝' },
+};
+
+function runHysteresis(params) {
+  const scnKey = CF_SCENARIOS[params.cfScenario] ? params.cfScenario : 'F';
+  const polKey = CF_POLICIES[params.cfPolicy] ? params.cfPolicy : 'none';
+  const scnDef = CF_SCENARIOS[scnKey];
+  const scn = injectCoreParams(scnDef.make(), params);
+
+  // 실행은 한 번뿐이다 — A안과 B안이 같은 궤적을 공유한다.
+  const r = runSimulation(scn);
+  const actualToggles = SimTestMetrics.countStagingTogglesExcludingStartup(r.runningCountSeries);
+  const cfA = SimTestMetrics.computeStagingCounterfactual(r.trendSeries, CF_POLICIES.actual_policy);
+  const cfB = SimTestMetrics.computeStagingCounterfactual(r.trendSeries, CF_POLICIES[polKey]);
+  const huntThreshold = SimTestMetrics.HUNTING_WARN_THRESHOLD_PER_MIN;
+
+  const mk = (key, label, cf) => ({
+    key, label,
+    metrics: { toggles: cf.toggles, togglesPerMin: cf.perMin, huntingSuspected: cf.perMin > huntThreshold },
+    trace: {
+      t: downsample(r.trendSeries, p => p.t),
+      speedCmd: downsample(r.trendSeries, p => p.speedCmdPct),
+      count: downsample(cf.countSeries.map((n, i) => ({ n, t: r.trendSeries[i].t })), p => p.n),
+    },
+    meta: { durationS: scn.durationS },
+  });
+  const runs = [
+    mk('A', CF_POLICIES.actual_policy.label, cfA),
+    mk('B', CF_POLICIES[polKey].label, cfB),
+  ];
+
+  const base = BASELINE.hysteresis[scnKey];
+  const baseline = { A: base.actual_policy, B: base[polKey] };
+  const ratio = cfA.toggles > 0 ? cfB.toggles / cfA.toggles : null;
+
+  return {
+    modeId: 'hysteresis',
+    runs,
+    rows: [
+      row('투입·해제 토글 횟수', '회', 0, runs[0], runs[1], 'toggles', baseline),
+      row('분당 토글', '회/분', 3, runs[0], runs[1], 'togglesPerMin', baseline),
+    ],
+    extra: {
+      upPct: SimCore.CONST.STAGE_UP_SPEED_PCT, downPct: SimCore.CONST.STAGE_DOWN_SPEED_PCT,
+      huntThreshold, actualToggles, reproducesActual: cfA.toggles === actualToggles,
+      scenarioLabel: scnDef.label, singleRun: true,
+    },
+    baselineSource: BASELINE.hysteresis.source,
+    verdict:
+      `<b>이 비교는 히스테리시스가 적용된 궤적에 단순 임계 판정을 역산한 것으로, 실제 두 번의 실행을 ` +
+      `비교한 다른 모드와 성격이 다르다.</b> 실행은 한 번뿐이고 A안·B안이 같은 속도지령 궤적을 공유한다 — ` +
+      `정책이 실제로 달랐다면 투입 대수가 달라져 그 궤적 자체가 달라졌을 것이므로 B안의 숫자는 근사다. ` +
+      `(방법 점검: 실제와 같은 정책으로 역산하면 실제 토글 수 ${actualToggles}회를 ` +
+      `${cfA.toggles}회로 ${cfA.toggles === actualToggles ? '그대로 재현한다' : '재현하지 못한다 — 결과를 신뢰할 수 없다'}.) ` +
+      `그 위에서 읽으면: ${scnDef.label} 조건에서 실제 정책은 ${cfA.toggles}회(${cfA.perMin.toFixed(2)}회/분), ` +
+      `${CF_POLICIES[polKey].label}는 ${cfB.toggles}회(${cfB.perMin.toFixed(2)}회/분)로 ` +
+      `${ratio == null ? 'N/A' : ratio.toFixed(0) + '배'}다. ` +
+      `헌팅 의심 기준 ${huntThreshold.toFixed(2)}회/분에 대해 실제 정책은 ` +
+      `${cfA.perMin > huntThreshold ? '초과' : '미달(정상)'}, ${CF_POLICIES[polKey].label}는 ` +
+      `${cfB.perMin > huntThreshold ? '초과(헌팅)' : '미달'}이다.`,
+  };
+}
+
 /* ---------------------------- 표시용 행 조립 ----------------------------
  * digits가 숫자면 수치 행(허용오차 비교), null이면 문자열 행(정확히 일치해야
  * 함) — 절체 모드의 "100/74.9/74.9"처럼 숫자 하나로 줄일 수 없는 지표가 있다. */
@@ -463,10 +570,9 @@ function rowText(label, unit, runA, runB, metricKey, baseline) {
   return makeRow(label, unit, null, runA, runB, metricKey, baseline);
 }
 
-/* ---------------------------- 모드 레지스트리 ----------------------------
- * 히스테리시스 모드는 아직 없다 — A/B가 "지연·히스테리시스가 없었다면"이라는
- * 역산 근사라서, 나머지 모드가 확정된 뒤에 별도로 붙인다. */
+/* ---------------------------- 모드 레지스트리 ---------------------------- */
 const MODES = [
+  { id: 'hysteresis', label: '히스테리시스', run: runHysteresis },
   { id: 'antiwindup', label: 'Anti-windup', run: runAntiWindup },
   { id: 'cascade', label: '캐스케이드 vs 단일루프', run: runCascade },
   { id: 'interlock', label: '인터록', run: runInterlock },

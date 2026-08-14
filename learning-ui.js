@@ -50,7 +50,7 @@ const ALL_PANEL_KEYS = Object.keys(PANEL_ANCHORS);
  * (탭 배치·가로 스크롤을 먼저 확인할 수 있게).
  * 히스테리시스는 A/B가 역산 근사라 맨 마지막에 붙인다. */
 const MODES = [
-  { id: 'hysteresis', label: '히스테리시스', impl: false },
+  { id: 'hysteresis', label: '히스테리시스', impl: true, panels: ['trend', 'operate', 'runtime', 'pid'] },
   { id: 'antiwindup', label: 'Anti-windup', impl: true, panels: ['trend', 'tuning', 'operate', 'automeasure'] },
   { id: 'cascade', label: '캐스케이드 vs 단일루프', impl: true, panels: ['trend', 'tuning', 'operate', 'automeasure'] },
   { id: 'interlock', label: '인터록', impl: true, panels: ['pid', 'electrical', 'pq', 'runtime'] },
@@ -66,6 +66,12 @@ const DEFAULT_MODE = 'antiwindup';
  * 선택지가 검증 스위트의 기준 실행 조건과 같다(그래야 기본 상태에서 두 줄이
  * 일치한다). */
 const MODE_PARAMS = {
+  hysteresis: [
+    { key: 'cfScenario', label: '부하 조건',
+      options: [{ v: 'F', t: '임계 근처 25s 진동' }, { v: 'A', t: '정상 3단 순환' }, { v: 'B', t: '급격한 부하 스텝' }] },
+    { key: 'cfPolicy', label: 'B안 정책',
+      options: [{ v: 'none', t: '밴드·지연 모두 제거' }, { v: 'no_delay', t: '지연만 제거' }, { v: 'no_band', t: '밴드만 제거' }] },
+  ],
   cascade: [
     { key: 'disturbanceKind', label: '외란 종류',
       options: [{ v: 'LOAD', t: '열부하 (외부루프 도메인)' }, { v: 'FLOW', t: '유량측 (내부루프 도메인)' }] },
@@ -130,6 +136,39 @@ function renderModeParams(mode) {
  * 수치를 본문에 박아넣지 않는다 — 실행할 때마다 달라지는 값은 결과 해석
  * 표와 판정문이 담당하고, 여기에는 변하지 않는 원리만 쓴다. */
 const DOCS = {
+  hysteresis: {
+    what: `펌프를 몇 대 돌릴지 정하는 대수제어는 속도지령이 임계값을 넘으면 한 대 더 투입하고,
+      충분히 내려가면 한 대 뺀다. 이때 투입 임계(90%)와 해제 임계(40%)를 다르게 두고(히스테리시스 밴드),
+      각각 15초·30초를 유지해야 실행한다(확인지연). 두 장치가 없으면 속도지령이 임계 근처에서
+      조금만 흔들려도 펌프가 계속 붙었다 떨어졌다 한다 — 헌팅이다. 실제 설비에서는 기동 횟수가
+      곧 마모와 수명이므로 이것은 비용 문제이기도 하다.
+      아래 비교는 같은 속도지령 궤적에 대해 <b>실제 정책</b>과 <b>그 장치를 뺀 정책</b>이 각각 몇 번
+      투입·해제했을지를 센다. 차트에서 속도지령선은 하나뿐이고, 우축의 운전 대수 계단만 갈라진다.`,
+    detail: `
+      <table>
+        <tr><th>항목</th><th>값</th><th>근거</th></tr>
+        <tr><td>증속 임계 / 유지시간</td><td>90 % / 15 초</td><td><code>STAGE_UP_SPEED_PCT</code>, <code>STAGE_UP_DELAY_S</code> (가정치)</td></tr>
+        <tr><td>해제 임계 / 유지시간</td><td>40 % / 30 초</td><td><code>STAGE_DOWN_SPEED_PCT</code>, <code>STAGE_DOWN_DELAY_S</code> — 해제를 투입보다 길게 둬 보수적으로 억제</td></tr>
+        <tr><td>헌팅 의심 기준</td><td>1.33 회/분</td><td>이론상 최속 왕복 15+30=45초 → 최대 2.67회/분, 그 절반을 경고선으로 잡은 가정치</td></tr>
+        <tr><td>밴드 제거의 정의</td><td>단일 임계 90 %</td><td>임계값을 새로 지어내지 않으려고 기존 상수를 그대로 재사용</td></tr>
+      </table>
+      <p><b>이 모드의 A/B는 실행 두 번이 아니다.</b> 히스테리시스를 끈 실행은 임계값·지연이
+      <code>Object.freeze</code>된 <code>CONST</code>에 있어 <code>sim-core.js</code>를 고치지 않으면
+      만들 수 없고, 이 프로젝트는 제어 로직을 건드리지 않는 것이 전제다. 그래서 한 번 실행해 얻은
+      속도지령 궤적에 판정 규칙만 바꿔 덧씌운다. <b>정책이 실제로 달랐다면 투입 대수가 달라지고
+      따라서 속도지령 궤적 자체도 달라졌을 것이므로, B안의 숫자는 근사다.</b> 다른 모드처럼
+      "두 조건을 실제로 돌려 비교한 값"으로 읽으면 안 된다.</p>
+      <p><b>그래도 방법 자체는 점검했다.</b> 실제와 동일한 정책을 넣어 역산하면 실제 토글 수가
+      그대로 재현되어야 하고, 시나리오 A·B·F 전부에서 재현된다(<code>tests/run.js</code>의 역산
+      타당성 점검, <code>staging_counterfactual.csv</code>의 <code>reproducesActual</code> 열).
+      재현되지 않으면 역산 결과 전부를 믿을 수 없다는 뜻이므로 스위트가 그것을 먼저 확인한다.
+      초기 마스터 기동에 의한 0→1 전이는 대수제어의 판단이 아니므로 양쪽 모두에서 제외한다.</p>
+      <p><b>부하 조건을 바꿔보면 두 장치의 역할이 갈린다.</b> 임계 근처 진동(적대적) 조건에서는
+      지연을 빼도 토글이 늘지 않는다 — 밴드만으로 이미 걸러지기 때문이다. 반면 정상 순환 부하에서는
+      지연을 빼면 토글이 크게 늘어난다. 어느 한 장치가 항상 주역인 것이 아니라 부하 패턴에 따라
+      기여도가 달라진다.</p>`,
+  },
+
   antiwindup: {
     what: `적분기가 있는 제어기는 출력이 상하한에 걸려도(포화) 오차가 남아 있으면 적분을 계속 쌓는다.
       쌓인 적분은 포화가 풀린 뒤에야 빠져나오므로, 제어량이 목표를 한참 지나쳐 반대편으로 넘어갔다가
@@ -341,7 +380,7 @@ function selectMode(modeId) {
 
   // 숨겨져 있던 캔버스는 크기가 0으로 잡혀 있으므로 다시 보일 때 재계산해야
   // 한다(Chart.js는 숨김 상태의 부모에서 높이를 0으로 읽는다).
-  requestAnimationFrame(resizeCharts);
+  setTimeout(resizeCharts, 16);
 }
 
 function applyPanelVisibility(mode) {
@@ -451,8 +490,10 @@ function runBench() {
   track('run_comparison', { mode: mode.label });
 
   // 계산은 동기라 그대로 부르면 위 "실행 중" 표시가 그려지기 전에 화면이
-  // 멈춘다. 한 프레임 양보해 상태 표시를 먼저 그린 뒤 실행한다.
-  requestAnimationFrame(() => setTimeout(() => {
+  // 멈춘다. 한 박자 양보해 상태 표시를 먼저 그린 뒤 실행한다.
+  // requestAnimationFrame을 쓰면 안 된다 — 브라우저 탭이 백그라운드일 때는
+  // rAF 콜백이 발화하지 않아 실행이 영영 시작되지 않고 "실행 중"에서 멈춘다.
+  setTimeout(() => {
     try {
       const result = SimBench.runMode(mode.id, benchParams(mode.id));
       resultCache[mode.id] = result;
@@ -465,7 +506,7 @@ function runBench() {
       btn.disabled = false;
       benchRunning = false;
     }
-  }, 0));
+  }, 16);
 }
 
 /* ---------------------------- 결과 렌더 ---------------------------- */
@@ -561,6 +602,23 @@ const LINE = {
 };
 
 const CHART_SPECS = {
+  hysteresis: {
+    // 속도지령 궤적은 A안·B안이 공유한다(실행이 한 번뿐이므로) — 그래서 한 줄만
+    // 그리고, 우축의 운전 대수 계단만 두 줄로 갈린다. 같은 입력에 판정 규칙만
+    // 다르게 씌웠다는 이 모드의 성격이 그림에 그대로 드러난다.
+    xTitle: '시뮬레이션 시간 (s)', yTitle: '펌프 속도지령 (%)', y1Title: '운전 대수',
+    build: (a, b, c, labels, extra) => [
+      { label: '속도지령 (A·B 공통)', data: a.trace.speedCmd, borderColor: c.B, yAxisID: 'y', ...LINE.main },
+      { label: `증속 임계 ${extra.upPct}%`, data: labels.map(() => extra.upPct),
+        borderColor: c.ref, yAxisID: 'y', ...LINE.ref },
+      { label: `해제 임계 ${extra.downPct}%`, data: labels.map(() => extra.downPct),
+        borderColor: c.ref, yAxisID: 'y', ...LINE.ref },
+      { label: `A · ${a.label} — 운전 대수`, data: a.trace.count, borderColor: c.A,
+        yAxisID: 'y1', pointRadius: 0, borderWidth: 2, stepped: true },
+      { label: `B · ${b.label} — 운전 대수`, data: b.trace.count, borderColor: c.B,
+        yAxisID: 'y1', pointRadius: 0, borderWidth: 2, borderDash: [5, 3], stepped: true },
+    ],
+  },
   antiwindup: {
     xTitle: '시뮬레이션 시간 (s)', yTitle: '공급온도 (°C)', y1Title: '외부루프 적분항',
     build: (a, b, c, labels, extra) => [

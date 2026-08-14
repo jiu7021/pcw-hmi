@@ -95,6 +95,11 @@ function runSimulation(scenario) {
       spTempC: state.spTempC,
       flowTotalM3h: state.flowTotalM3h,
       flowSpM3h: state.flowSpM3h,
+      // 대수제어는 speedCmdPct를 임계값과 비교해 투입/해제를 판단하므로,
+      // "그 지령이 어떻게 움직였는가"를 사후에 분석하려면 이 값이 필요하다.
+      // 순수 관측 기록이라 시뮬레이션 진행에는 영향이 없다.
+      speedCmdPct: state.speedCmdPct,
+      runningCount: state.pumps.filter(p => p.status === 'RUNNING').length,
       outerIntegral: state.outerPid.integral,
       shadowCascadeC: shadow ? shadow.cascade.tempC : null,
       shadowSingleC: shadow ? shadow.single.tempC : null,
