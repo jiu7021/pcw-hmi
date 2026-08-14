@@ -1,2 +1,3 @@
-scenario,deviationThresholdC,deviationExceededAtS,diagFirstActiveAtS,everDetected,blindSpotDurationS,finalDeviationC
-I_sensor_drift_long_run,1,3.4000000000000017,,false,3596.599999997821,1.887
+scenario,deviationThresholdC,deviationExceededAtS,diagFirstActiveAtS,everDetected,blindSpotDurationS,finalDeviationC,exceededSampleCount,totalSampleCount,exceededSampleRatioPct
+I_sensor_drift_long_run,1,3.4000000000000017,,false,3596.599999997821,1.887,19278,36000,53.55
+I_control_no_degradation,1,3.4000000000000017,,false,3596.599999997821,0.031,361,36000,1

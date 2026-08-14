@@ -43,6 +43,11 @@ function runPlantSimulation(scenario) {
   let nextEventIdx = 0;
 
   const driftSeries = [];
+  // trendSeries: tests/runner.js와 같은 형식의 순수 관측 기록. 판정·지표
+  // 계산에 쓰이는 입력이 아니라 결과를 사후에 분석하기 위한 것이라, 이걸
+  // 기록해도 시뮬레이션 진행에는 아무 영향이 없다(driftSeries와 동일한 성격).
+  // 절체 시나리오처럼 "최종값이 아니라 과정"을 봐야 하는 경우가 있어 추가했다.
+  const trendSeries = [];
 
   const totalTicks = Math.round(scenario.durationS / dtInner);
   for (let i = 0; i < totalTicks; i++) {
@@ -69,6 +74,21 @@ function runPlantSimulation(scenario) {
       }
     }
 
+    trendSeries.push({
+      t: state.simTimeS,
+      supplyTempC: state.supplyTempC,
+      spTempC: state.spTempC,
+      flowTotalM3h: state.flowTotalM3h,
+      flowSpM3h: state.flowSpM3h,
+      outerIntegral: state.outerPid.integral,
+      runningCount: state.pumps.filter(p => p.status === 'RUNNING').length,
+      // 절체 시나리오의 핵심은 온도가 아니라 "누가 어떤 급전모드로 몇 %를
+      // 내고 있는가"다 — 바이패스로 묶인 펌프가 고정속도로 도는 동안 나머지
+      // VFD 펌프가 속도를 낮춰 총유량을 맞추는 과정이 여기서만 보인다.
+      pumpSpeeds: state.pumps.map(p => p.speedPct),
+      feedModes: state.pumps.map(p => p.feedMode),
+    });
+
     if (scenario.recordDrift) {
       driftSeries.push({
         t: state.simTimeS,
@@ -79,7 +99,7 @@ function runPlantSimulation(scenario) {
     }
   }
 
-  return { plant, state, violations, driftSeries };
+  return { plant, state, violations, driftSeries, trendSeries };
 }
 
 return { runPlantSimulation };

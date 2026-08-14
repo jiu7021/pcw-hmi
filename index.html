@@ -135,10 +135,117 @@ table.alarms button{padding:2px 8px;font-size:10px;}
 @media (max-width:900px){
   .grid{grid-template-columns:1fr;}
 }
+
+/* =========================================================================
+ * 학습 모드 UI — 기존 :root 변수는 건드리지 않고 새 토큰만 추가한다.
+ * (--blue 등을 바꾸면 "전체 보기" 탭의 기존 화면이 달라지기 때문)
+ *
+ * 상태색은 3색만 쓴다: 정상(녹)/경보(황)/트립·정지(적). 그 외는 전부 회색조.
+ * A/B 트렌드선에는 상태색을 쓰지 않는다 — 실물 HMI(Ignition/WinCC)에서
+ * 트렌드 색은 상태를 뜻하지 않으므로, 명도 2단 + 실선/파선으로만 구분한다.
+ * ========================================================================= */
+:root{
+  --hmi-ok:#2ecc71; --hmi-warn:#f1c40f; --hmi-trip:#ff4d4d;
+  --hmi-g0:#0a0e13; --hmi-g1:#121822; --hmi-g2:#1a2431;
+  --hmi-g3:#25313f; --hmi-g4:#748094; --hmi-g5:#c9d6e3;
+  --hmi-s1:4px; --hmi-s2:8px; --hmi-s3:12px; --hmi-s4:16px; --hmi-s5:24px;
+  --hmi-mono:'SF Mono','Consolas','Menlo',monospace;
+  --hmi-fs-num:15px; --hmi-fs-body:13px; --hmi-fs-label:11px;
+  --hmi-radius:4px;
+  /* A/B 트레이스 — 회색조 명도 2단 */
+  --hmi-trace-a:#8f9dad; --hmi-trace-b:#e8eef5;
+}
+.hmi-hidden{display:none !important;}
+
+#hmiHeader{display:flex;align-items:center;gap:var(--hmi-s3);flex-wrap:wrap;
+  padding:var(--hmi-s3) 0 var(--hmi-s2);border-bottom:1px solid var(--hmi-g3);margin-bottom:var(--hmi-s3);}
+#hmiHeader h1{margin:0;font-size:17px;color:#e6edf5;font-weight:600;letter-spacing:-.01em;}
+#hmiHeader .badge{font-family:var(--hmi-mono);font-size:var(--hmi-fs-label);
+  color:var(--hmi-warn);border:1px solid var(--hmi-warn);border-radius:var(--hmi-radius);
+  padding:3px 8px;white-space:nowrap;}
+
+#modeTabs{display:flex;gap:var(--hmi-s1);overflow-x:auto;margin-bottom:var(--hmi-s3);
+  border-bottom:1px solid var(--hmi-g3);scrollbar-width:none;-webkit-overflow-scrolling:touch;}
+#modeTabs::-webkit-scrollbar{display:none;}
+#modeTabs button{flex:0 0 auto;background:transparent;border:none;border-bottom:2px solid transparent;
+  border-radius:0;color:var(--hmi-g4);padding:var(--hmi-s2) var(--hmi-s3);font-size:var(--hmi-fs-body);
+  font-weight:600;cursor:pointer;transition:color .15s,border-color .15s;}
+#modeTabs button:hover{color:var(--hmi-g5);border-color:var(--hmi-g3);}
+#modeTabs button.sel{color:var(--hmi-g5);border-bottom-color:var(--hmi-g5);}
+
+.hmi-card{background:var(--hmi-g1);border:1px solid var(--hmi-g3);border-radius:var(--hmi-radius);
+  padding:var(--hmi-s3);margin-bottom:var(--hmi-s3);}
+.hmi-card > h2{font-size:var(--hmi-fs-label);text-transform:uppercase;letter-spacing:.06em;
+  color:var(--hmi-g4);margin:0 0 var(--hmi-s2);border-bottom:1px solid var(--hmi-g3);padding-bottom:var(--hmi-s1);}
+
+/* 학습 모드에서 한쪽 컬럼의 패널이 전부 숨겨지면 2단 그리드가 절반을 빈 채로
+   남긴다. 남은 컬럼이 하나뿐일 때는 1단으로 접는다(기존 .grid 규칙은 그대로
+   두고 클래스로만 덮어쓴다 — 전체 보기에서는 이 클래스가 붙지 않는다). */
+.grid.hmi-onecol{grid-template-columns:1fr;}
+/* 학습 모드에서는 제목을 새 헤더가 맡으므로 남은 시계·배속만 오른쪽 정렬 */
+.topbar.hmi-compact{justify-content:flex-end;gap:var(--hmi-s3);}
+
+#benchBar{display:flex;align-items:center;gap:var(--hmi-s3);flex-wrap:wrap;margin-bottom:var(--hmi-s3);}
+#btnRunBench{background:var(--hmi-g2);border:1px solid var(--hmi-g4);color:var(--hmi-g5);
+  border-radius:var(--hmi-radius);padding:var(--hmi-s2) var(--hmi-s4);font-size:var(--hmi-fs-body);font-weight:700;}
+#btnRunBench:hover:not(:disabled){border-color:var(--hmi-g5);}
+#benchStatus{font-family:var(--hmi-mono);font-size:var(--hmi-fs-label);color:var(--hmi-g4);}
+.bench-chart{position:relative;height:280px;}
+@media (max-width:900px){.bench-chart{height:210px;}}
+
+table.hmi-result{width:100%;border-collapse:collapse;font-size:var(--hmi-fs-body);margin-top:var(--hmi-s3);}
+table.hmi-result th{text-align:left;color:var(--hmi-g4);font-weight:600;font-size:var(--hmi-fs-label);
+  text-transform:uppercase;letter-spacing:.04em;padding:var(--hmi-s1) var(--hmi-s2);border-bottom:1px solid var(--hmi-g3);}
+table.hmi-result td{padding:var(--hmi-s2);border-bottom:1px solid var(--hmi-g2);vertical-align:top;}
+table.hmi-result td.metric{color:var(--hmi-g4);}
+.hmi-num{font-family:var(--hmi-mono);font-variant-numeric:tabular-nums;font-size:var(--hmi-fs-num);color:var(--hmi-g5);}
+.hmi-sub{display:block;font-family:var(--hmi-mono);font-size:var(--hmi-fs-label);color:var(--hmi-g4);margin-top:2px;}
+.hmi-match{color:var(--hmi-ok);} .hmi-mismatch{color:var(--hmi-trip);font-weight:700;}
+.hmi-verdict{margin-top:var(--hmi-s3);padding:var(--hmi-s3);background:var(--hmi-g2);
+  border-left:3px solid var(--hmi-g4);border-radius:0 var(--hmi-radius) var(--hmi-radius) 0;line-height:1.65;}
+
+#modeDoc h3{font-size:var(--hmi-fs-body);color:var(--hmi-g5);margin:0 0 var(--hmi-s2);
+  padding-bottom:var(--hmi-s1);border-bottom:1px solid var(--hmi-g3);}
+#modeDoc p{margin:0 0 var(--hmi-s2);line-height:1.7;color:var(--hmi-g5);}
+#modeDoc details{margin-top:var(--hmi-s2);}
+#modeDoc summary{cursor:pointer;color:var(--hmi-g4);font-weight:600;font-size:var(--hmi-fs-label);
+  text-transform:uppercase;letter-spacing:.05em;padding:var(--hmi-s2) 0;list-style:none;}
+#modeDoc summary::before{content:'▸ ';}
+#modeDoc details[open] summary::before{content:'▾ ';}
+#modeDoc details > div{padding:var(--hmi-s2) 0 0;color:var(--hmi-g4);line-height:1.7;}
+#modeDoc table{width:100%;border-collapse:collapse;font-size:var(--hmi-fs-label);margin:var(--hmi-s2) 0;}
+#modeDoc th,#modeDoc td{text-align:left;padding:var(--hmi-s1) var(--hmi-s2);border-bottom:1px solid var(--hmi-g2);}
+#modeDoc th{color:var(--hmi-g5);}
+#modeDoc code{font-family:var(--hmi-mono);font-size:var(--hmi-fs-label);color:var(--hmi-g5);}
 </style>
+<!-- 방문 통계 (Umami Cloud) — 쿠키를 심지 않고 방문자를 식별하지 않는다.
+     data-website-id는 자리표시자이며 배포 전에 실제 ID로 교체해야 한다.
+     스크립트가 차단되면 umami 전역이 없는데, 이벤트 호출부는 전부
+     typeof 검사로 감싸져 있어 페이지는 그대로 동작한다(learning-ui.js track()). -->
+<script defer src="https://cloud.umami.is/script.js" data-website-id="UMAMI_WEBSITE_ID"></script>
 </head>
 <body>
 <div id="app">
+
+  <!-- ===== 학습 모드 UI (learning-ui.js가 제어) =====
+       기존 화면(.sim-banner ~ .grid)은 한 줄도 바꾸지 않았다. "전체 보기" 탭은
+       별도로 다시 만든 재현물이 아니라 아래의 바로 그 DOM이며, 학습 모드에서는
+       모드별로 패널의 가시성만 토글한다(learning-ui.js PANEL_ANCHORS 참조). -->
+  <header id="hmiHeader">
+    <h1>PCW 시스템 HMI — 공정냉각수</h1>
+    <span class="badge">실물 PLC 미연결 시뮬레이션</span>
+  </header>
+  <nav id="modeTabs"></nav>
+
+  <section id="benchPanel" class="hmi-card">
+    <h2>A/B 비교</h2>
+    <div id="benchBar">
+      <button id="btnRunBench">비교 실행</button>
+      <span id="benchStatus">비교 실행을 누르면 A안과 B안을 순차로 실행합니다.</span>
+    </div>
+    <div class="bench-chart"><canvas id="benchChart"></canvas></div>
+    <div id="benchResult"></div>
+  </section>
 
   <div class="sim-banner">⚠ 시뮬레이션 모드 — 실물 PLC 미연결 (No Live PLC Connection). 모든 수치는 브라우저 내 수학 모델로 계산됩니다.</div>
   <div id="alarmBanner" class="alarm-banner"><div id="alarmBannerText"></div><button id="alarmBannerAckAll">전체 ACK</button></div>
@@ -376,6 +483,8 @@ table.alarms button{padding:2px 8px;font-size:10px;}
       </div>
     </div>
   </div>
+
+  <section id="modeDoc" class="hmi-card"></section>
 </div>
 
 <script>
@@ -1046,5 +1155,18 @@ function init() {
 }
 window.addEventListener('DOMContentLoaded', init);
 </script>
+
+<!-- 학습 모드 계층. 위 인라인 스크립트보다 뒤에 두어야 plant/state/chart 전역
+     렉시컬 바인딩을 참조할 수 있고, DOMContentLoaded 핸들러도 init() 뒤에
+     등록되므로 차트 생성이 끝난 상태에서 실행된다. -->
+<script src="tests/invariants.js"></script>
+<script src="tests/metrics.js"></script>
+<script src="tests/scenarios.js"></script>
+<script src="tests/runner.js"></script>
+<script src="tests/scenarios-plant.js"></script>
+<script src="tests/runner-plant.js"></script>
+<script src="tests/sag-demo.js"></script>
+<script src="sim-bench.js"></script>
+<script src="learning-ui.js"></script>
 </body>
 </html>

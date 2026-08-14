@@ -37,6 +37,9 @@ function runCase(pumps, ticks) {
   const dt = 0.1;
   let t = 0;
   let minV = 1.0, essOnV = null;
+  // trace: 화면(학습 모드 인터록 탭)이 전압 파형을 그리기 위한 기록. 계산에는
+  // 전혀 관여하지 않는 순수 관측용 추가이므로 minV/essOnV 값은 달라지지 않는다.
+  const trace = [];
   for (let i = 0; i < ticks; i++) {
     const prevStartTimers = pumps.map(p => p.startTimer);
     t += dt;
@@ -47,9 +50,10 @@ function runCase(pumps, ticks) {
       PQLayer.updateSubstep(pq, s.busVoltagePu, tStart + s.tOffsetS, () => PQLayer.classifyCause(es));
       if (s.busVoltagePu < minV) minV = s.busVoltagePu;
       if (pq.essActive && essOnV === null) essOnV = pq.fastVoltagePu;
+      trace.push({ t: tStart + s.tOffsetS, vPu: s.busVoltagePu });
     });
   }
-  return { minV, essOnV };
+  return { minV, essOnV, trace };
 }
 
 function runInterlockBypassDemo() {

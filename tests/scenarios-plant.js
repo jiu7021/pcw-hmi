@@ -52,6 +52,22 @@ function scenarioI() {
   };
 }
 
+/* I-control. 시나리오 I의 대조군 — 지속시간·시드·부하를 그대로 두고 센서 열화
+ * 주입만 뺀다. 대조군이 없으면 "열화 100%에서 최종 편차 1.887°C"라는 수치가
+ * 큰 것인지 작은 것인지 판단할 기준이 없다(무열화에서도 센서 잡음·응답지연으로
+ * 편차가 0은 아니다). 같은 시드를 쓰므로 부하 잡음까지 동일한 조건이다. */
+function scenarioIControl() {
+  return {
+    name: 'I_control_no_degradation',
+    description: '시나리오 I 대조군 — 센서 열화 없이 동일 조건 1시간 (열화 케이스와 비교용)',
+    durationS: 3600,
+    seed: 9001,
+    recordDrift: true,
+    loadProfile: () => LOAD_MED_KW,
+    events: [{ atS: 0, fn: (plant) => SimCore.masterStart(plant.core) }],
+  };
+}
+
 /* J. VFD 고장 → 바이패스(DOL) 절체. 고부하로 고정해 절체 이후 나머지 VFD
  * 펌프들이 대수제어로 추가 기동되도록 유도한다 — (1) 바이패스로 고정속도
  * 운전 중인 펌프가 섞인 상태에서도 온도 제어가 유지되는지, (2) 그 추가
@@ -68,13 +84,32 @@ function scenarioJ() {
       { atS: 0, fn: (plant) => SimCore.masterStart(plant.core) },
       { atS: vfdFaultAtS, fn: (plant) => SimPlant.injectVfdFault(plant, 1, true) },
     ],
+    recordChangeover: true,
     meta: { vfdFaultAtS },
   };
 }
 
-function allPlantScenarios() {
-  return [scenarioH(), scenarioI(), scenarioJ()];
+/* J-control. 시나리오 J의 대조군 — VFD 고장 주입만 뺀다. 절체의 효과를 보려면
+ * "절체가 없었다면 같은 시각에 온도가 어떻게 움직였는가"가 있어야 한다.
+ * meta.vfdFaultAtS는 고장이 없어도 그대로 둔다 — 대조군에서도 같은 시각을
+ * 기준으로 과도응답을 재야 두 실행을 나란히 비교할 수 있기 때문이다. */
+function scenarioJControl() {
+  const vfdFaultAtS = 100;
+  return {
+    name: 'J_control_no_vfd_fault',
+    description: '시나리오 J 대조군 — VFD 고장 없이 동일 조건 (절체 케이스와 비교용)',
+    durationS: 500,
+    seed: 10001,
+    loadProfile: () => SimCore.CONST.LOAD_HIGH_KW,
+    events: [{ atS: 0, fn: (plant) => SimCore.masterStart(plant.core) }],
+    recordChangeover: true,
+    meta: { vfdFaultAtS: null, compareAtS: vfdFaultAtS },
+  };
 }
 
-return { scenarioH, scenarioI, scenarioJ, allPlantScenarios };
+function allPlantScenarios() {
+  return [scenarioH(), scenarioI(), scenarioIControl(), scenarioJ(), scenarioJControl()];
+}
+
+return { scenarioH, scenarioI, scenarioIControl, scenarioJ, scenarioJControl, allPlantScenarios };
 });

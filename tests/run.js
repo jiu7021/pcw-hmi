@@ -269,29 +269,41 @@ for (const scn of plantScenarios.allPlantScenarios()) {
       scenario: scn.name, deviationThresholdC: bs.deviationThresholdC,
       deviationExceededAtS: bs.deviationExceededAtS, diagFirstActiveAtS: bs.diagFirstActiveAtS,
       everDetected: bs.everDetected, blindSpotDurationS: bs.blindSpotDurationS, finalDeviationC: +bs.finalDeviationC.toFixed(3),
+      // blindSpotDurationS는 기동 과도 때문에 열화 유무를 구분하지 못한다
+      // (metrics.js 주석 참조). 비율 지표는 컷오프 없이 그 둘을 갈라준다.
+      exceededSampleCount: bs.exceededSampleCount,
+      totalSampleCount: bs.totalSampleCount,
+      exceededSampleRatioPct: +(bs.exceededSampleRatio * 100).toFixed(2),
     });
   }
 
   let changeoverNote = '';
-  if (scn.name === 'J_vfd_fault_bypass_failover' && scn.meta) {
+  if (scn.recordChangeover && scn.meta) {
     // TOLERANCE_C(±2°C): "절체 후에도 제어가 유지되었다"고 볼 수 있는 대표
     // 허용폭 — 정상 시나리오들의 정상상태편차(steadyStateErrorC, 대개 0.01°C
     // 미만)보다 훨씬 넉넉하게 잡아, 바이패스로 고정속도 펌프가 섞여 정밀도는
     // 다소 떨어지더라도 "제어 자체는 살아있다"는 것만 확인하는 취지의 가정치.
     const TOLERANCE_C = 2.0;
-    // runPlantSimulation은 트렌드를 저장하지 않으므로 최종 상태의 정상상태
-    // 편차만 본다(장시간 평균 대신 마지막 30초를 재현하려면 별도 트렌드 기록이
-    // 필요하지만, 이 시나리오는 pass/fail 목적이 아니라 "제어가 살아있는가"를
-    // 확인하는 목적이라 마지막 시점의 오차로 충분하다).
     const finalErrorC = result.state.supplyTempC - result.state.spTempC;
     const maintained = Math.abs(finalErrorC) <= TOLERANCE_C;
+    // 온도 지표로는 절체 여부를 구분할 수 없다 — 절체 케이스와 대조군의
+    // 공급온도 궤적이 전 구간 최대 0.0264°C밖에 차이나지 않고, t=100s의
+    // 과도(3.107°C)는 VFD 고장이 아니라 고부하 기동·대수제어 과도라서
+    // 대조군에도 똑같이 나타난다. 그래서 "온도가 안 바뀐다"는 사실 자체를
+    // 결과로 싣고, 실제로 갈리는 펌프 속도·급전모드를 함께 기록한다.
+    const eventAtS = scn.meta.vfdFaultAtS ?? scn.meta.compareAtS;
+    const finalSpeeds = result.state.pumps.map(p => +p.speedPct.toFixed(1));
     changeoverRows.push({
       scenario: scn.name, vfdFaultAtS: scn.meta.vfdFaultAtS,
       finalSupplyTempC: +result.state.supplyTempC.toFixed(3), spTempC: result.state.spTempC,
       finalErrorC: +finalErrorC.toFixed(3), toleranceC: TOLERANCE_C, controlMaintained: maintained,
       pump1FeedMode: result.state.pumps[0].feedMode, pump1Status: result.state.pumps[0].status,
+      eventAtS,
+      finalSpeedPct: finalSpeeds.join('/'),
+      finalFeedModes: result.state.pumps.map(p => p.feedMode).join('/'),
+      finalFlowM3h: +result.state.flowTotalM3h.toFixed(1),
     });
-    changeoverNote = ` — 바이패스 절체 후 온도제어 유지: ${maintained ? 'YES' : 'NO'}(오차 ${finalErrorC.toFixed(2)}°C)`;
+    changeoverNote = ` — 온도제어 유지: ${maintained ? 'YES' : 'NO'}(최종오차 ${finalErrorC.toFixed(2)}°C), 최종 속도 ${finalSpeeds.join('/')}%`;
   }
 
   const pass = result.violations.length === 0;

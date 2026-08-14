@@ -1,4 +1,6 @@
 scenario,sagCount,avgDepthPct,maxDepthPct,avgDurationMs,maxDurationMs
 H_sensor_stuck,0,0,0,0,0
 I_sensor_drift_long_run,0,0,0,0,0
+I_control_no_degradation,0,0,0,0,0
 J_vfd_fault_bypass_failover,0,0,0,0,0
+J_control_no_vfd_fault,0,0,0,0,0

@@ -147,13 +147,28 @@ function computePumpBalance(pumps) {
  * "미검출 구간"으로 본다. 오프셋 드리프트는 이 시뮬레이터가 구현한 진단 어느
  * 것으로도 원천적으로 검출되지 않도록 설계했으므로(README 참조), 대개는
  * diagFirstActiveAtS가 null로 나오는 것 자체가 의도된 결과다.
+ *
+ * ---- blindSpotDurationS의 한계와 exceededSampleRatio ----
+ * blindSpotDurationS는 "편차가 임계를 처음 넘은 시각"을 시작점으로 삼는데,
+ * 기동 직후에는 열화가 전혀 없어도 냉각 과도구간에서 센서 응답지연만으로
+ * 편차가 임계를 넘는다(대조군 실측: 열화 0%인데 t=3.4s에 1.0°C 초과, 최대
+ * 4.357°C @6.1s, 마지막 초과 71.9s). 그래서 이 값은 열화 유무와 거의 무관하게
+ * 전 구간으로 잡혀 두 케이스를 구분하지 못한다(3596.6s vs 3596.6s).
+ *
+ * exceededSampleRatio는 "전체 샘플 중 편차가 임계를 넘은 샘플의 비율"이라
+ * 최초 시각 하나에 좌우되지 않는다 — 기동 과도는 전체의 1% 남짓이라 자연히
+ * 묻히고, 지속적인 드리프트만 비율로 남는다(실측: 열화 100% 53.6% vs
+ * 대조군 1.0%, 53배). 과도구간을 잘라내는 컷오프 시각을 정할 필요가 없어서
+ * "왜 하필 그 시각인가"라는 임의성도 생기지 않는다.
  */
 function computeDriftBlindSpot(driftSeries, deviationThresholdC) {
   deviationThresholdC = deviationThresholdC ?? 1.0;
   let deviationExceededAtS = null;
   let diagFirstActiveAtS = null;
+  let exceededSampleCount = 0;
   for (const p of driftSeries) {
     const dev = Math.abs(p.trueV - p.measV);
+    if (dev >= deviationThresholdC) exceededSampleCount++;
     if (deviationExceededAtS === null && dev >= deviationThresholdC) deviationExceededAtS = p.t;
     if (diagFirstActiveAtS === null && p.diagActive) diagFirstActiveAtS = p.t;
   }
@@ -167,6 +182,9 @@ function computeDriftBlindSpot(driftSeries, deviationThresholdC) {
     everDetected: diagFirstActiveAtS !== null,
     blindSpotDurationS: (deviationExceededAtS != null && blindSpotEndS != null) ? (blindSpotEndS - deviationExceededAtS) : null,
     finalDeviationC,
+    exceededSampleCount,
+    totalSampleCount: driftSeries.length,
+    exceededSampleRatio: driftSeries.length ? exceededSampleCount / driftSeries.length : 0,
   };
 }
 
