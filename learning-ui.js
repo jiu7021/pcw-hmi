@@ -53,7 +53,7 @@ const MODES = [
   { id: 'hysteresis', label: '히스테리시스', impl: false },
   { id: 'antiwindup', label: 'Anti-windup', impl: true, panels: ['trend', 'tuning', 'operate', 'automeasure'] },
   { id: 'cascade', label: '캐스케이드 vs 단일루프', impl: true, panels: ['trend', 'tuning', 'operate', 'automeasure'] },
-  { id: 'interlock', label: '인터록', impl: false },
+  { id: 'interlock', label: '인터록', impl: true, panels: ['pid', 'electrical', 'pq', 'runtime'] },
   { id: 'failover', label: '보호·절체', impl: false },
   { id: 'sensor', label: '센서 열화', impl: false },
   { id: 'full', label: '전체 보기', impl: true, panels: ALL_PANEL_KEYS },
@@ -69,6 +69,12 @@ const MODE_PARAMS = {
   cascade: [
     { key: 'disturbanceKind', label: '외란 종류',
       options: [{ v: 'LOAD', t: '열부하 (외부루프 도메인)' }, { v: 'FLOW', t: '유량측 (내부루프 도메인)' }] },
+  ],
+  interlock: [
+    { key: 'simultaneousStarts', label: '동시 기동 대수',
+      options: [{ v: 2, t: '2대' }, { v: 3, t: '3대' }] },
+    { key: 'feedMode', label: '급전모드',
+      options: [{ v: 'BYPASS', t: '바이패스 (DOL)' }, { v: 'VFD', t: 'VFD 소프트스타트' }] },
   ],
 };
 const modeParamState = {}; // { modeId: { key: value } }
@@ -184,6 +190,38 @@ const DOCS = {
       <p><b>차트의 유량 SP선(가는 파선)을 함께 보라.</b> 캐스케이드에서만 외부루프가 유량 SP를
       만들어 내부루프에 건네주므로, 그 선이 움직이는 모양이 곧 "외부루프가 내부루프에 무엇을
       지시했는가"다. 단일루프는 그 중간 신호가 없어 속도를 직접 흔든다.</p>`,
+  },
+
+  interlock: {
+    what: `펌프를 동시에 여러 대 기동하지 못하게 막는 인터록이 있다(<code>anyPumpStarting</code> 잠금).
+      막상 "왜 막아야 하는가"는 정상 운전에서는 관측할 수 없다 — 인터록이 그 상황을 아예 못 만들게
+      하기 때문이다. 그래서 이 비교는 전기·전력품질 계층을 직접 호출해 <b>인터록을 코드 레벨에서
+      일부러 우회한 가상의 상태</b>를 만들고, 그때 모선전압이 관리한계 아래로 떨어지는지를 본다.
+      핵심은 급전모드다. VFD 정상 기동은 소프트스타트라 돌입전류가 정격의 110~150%에 그쳐 몇 대가
+      겹쳐도 문제가 없다. 위험한 것은 <b>VFD 고장으로 상용전원 직입(바이패스, DOL)이 된 펌프가 둘
+      이상 겹치는 경우</b>다 — DOL 돌입전류는 정격의 5~7배다. 위 <b>급전모드</b>를 VFD로 바꿔보면
+      같은 대수를 겹쳐도 전압이 거의 내려가지 않는 것을 확인할 수 있다.`,
+    detail: `
+      <table>
+        <tr><th>항목</th><th>값</th><th>근거</th></tr>
+        <tr><td>전압 관리한계</td><td>85 %</td><td><code>PQLayer.CONST.VOLTAGE_MANAGEMENT_FLOOR_PU</code></td></tr>
+        <tr><td>DOL 돌입전류</td><td>정격의 5~7배</td><td>유도전동기의 잘 알려진 표준 특성</td></tr>
+        <tr><td>VFD 기동 전류</td><td>정격의 110~150 %</td><td>소프트스타트(램프+전류제한) 통상값</td></tr>
+        <tr><td>계산 해상도</td><td>5 ms 서브스텝</td><td>100ms에 한 번만 계산하면 돌입 순간의 최저점을 놓친다</td></tr>
+        <tr><td>관측 구간</td><td>5 초 (50틱)</td><td><code>tests/sag-demo.js</code>와 동일</td></tr>
+        <tr><td>sag 판정</td><td>0.9 pu 미만이 20 ms 이상</td><td>IEEE 1159</td></tr>
+      </table>
+      <p><b>이 비교는 정식 시나리오가 아니다.</b> 실제 앱에서는 <code>startPump()</code>의
+      <code>anyPumpStarting</code> 잠금 때문에 B안의 상태 자체가 만들어질 수 없고, 불변조건
+      INV1이 매 틱 그것을 확인한다. 여기서는 그 잠금을 거치지 않고 펌프 배열을 직접 구성해
+      "막지 않았다면 어떻게 되는가"를 계산한다 — 즉 <b>인터록 상수의 근거를 수치로 남기기 위한
+      데모</b>다(<code>tests/sag-demo.js</code> 상단 주석 참조).</p>
+      <p><b>왜 조건부로 풀지 않고 항상 거는가.</b> "바이패스일 때만 동시 기동을 막는다"로 만들면
+      그 판단 로직 자체가 새로운 실수 지점이 된다. 급전모드는 VFD 고장으로 언제든 바뀌므로,
+      방어적으로 모든 기동에 일괄 적용한다(<code>sim-core.js startPump()</code> 주석).</p>
+      <p><b>AVR을 쓰지 않는 이유.</b> 탭체인저 같은 전압조정기는 응답이 수백 ms~수초로 느려
+      ms급 sag에는 대응할 수 없다. 그래서 ESS/PCS 무효전력 주입만 쓴다
+      (<code>sim-power-quality.js</code> 상단 주석).</p>`,
   },
 };
 
@@ -454,7 +492,7 @@ const LINE = {
 const CHART_SPECS = {
   antiwindup: {
     xTitle: '시뮬레이션 시간 (s)', yTitle: '공급온도 (°C)', y1Title: '외부루프 적분항',
-    build: (a, b, c, labels) => [
+    build: (a, b, c, labels, extra) => [
       { label: `A · ${a.label} — 공급온도`, data: a.trace.temp, borderColor: c.A, yAxisID: 'y', ...LINE.main },
       { label: `B · ${b.label} — 공급온도`, data: b.trace.temp, borderColor: c.B, yAxisID: 'y', ...LINE.mainDash },
       { label: 'A · 외부루프 적분항', data: a.trace.integral, borderColor: c.A, yAxisID: 'y1', ...LINE.sub },
@@ -464,12 +502,23 @@ const CHART_SPECS = {
   },
   cascade: {
     xTitle: '시뮬레이션 시간 (s)', yTitle: '공급온도 (°C)', y1Title: '유량 SP (m³/h)',
-    build: (a, b, c, labels) => [
+    build: (a, b, c, labels, extra) => [
       { label: `A · ${a.label} — 공급온도`, data: a.trace.temp, borderColor: c.A, yAxisID: 'y', ...LINE.main },
       { label: `B · ${b.label} — 공급온도`, data: b.trace.temp, borderColor: c.B, yAxisID: 'y', ...LINE.mainDash },
       { label: 'A · 유량 SP', data: a.trace.flowSp, borderColor: c.A, yAxisID: 'y1', ...LINE.sub },
       { label: 'B · 유량 SP', data: b.trace.flowSp, borderColor: c.B, yAxisID: 'y1', ...LINE.sub },
       { label: 'SP', data: labels.map(() => a.meta.sp), borderColor: c.ref, yAxisID: 'y', ...LINE.ref },
+    ],
+  },
+  interlock: {
+    // 5ms 해상도 파형이라 시간축 단위가 다르지만, 축 제목 위치와 범례 규칙은
+    // 다른 모드와 동일하게 유지한다.
+    xTitle: '기동 후 경과 시간 (s)', yTitle: '모선전압 (%)', y1Title: null,
+    build: (a, b, c, labels, extra) => [
+      { label: `A · ${a.label}`, data: a.trace.volt, borderColor: c.A, yAxisID: 'y', ...LINE.main },
+      { label: `B · ${b.label}`, data: b.trace.volt, borderColor: c.B, yAxisID: 'y', ...LINE.mainDash },
+      { label: `관리한계 ${extra.floorPct}%`, data: labels.map(() => extra.floorPct),
+        borderColor: c.ref, yAxisID: 'y', ...LINE.ref },
     ],
   },
 };
@@ -502,7 +551,7 @@ function drawChart(result) {
 
   benchChart = new Chart(canvas.getContext('2d'), {
     type: 'line',
-    data: { labels, datasets: spec.build(a, b, c, labels) },
+    data: { labels, datasets: spec.build(a, b, c, labels, result.extra || {}) },
     options: {
       responsive: true, maintainAspectRatio: false, animation: false,
       interaction: { mode: 'index', intersect: false },
