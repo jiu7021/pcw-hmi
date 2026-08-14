@@ -335,6 +335,10 @@ function runFailover(params) {
         speeds: [0, 1, 2].map(i => downsample(r.trendSeries, p => p.pumpSpeeds[i])),
         temp: downsample(r.trendSeries, p => p.supplyTempC),
       },
+      // 판정문의 "전 구간 최대 온도차"는 솎아낸 트레이스가 아니라 원본
+      // 해상도로 계산해야 한다 — 표시용으로 걸러낸 점들 사이에 더 큰 차이가
+      // 숨어 있으면 실제보다 작은 값을 주장하게 된다.
+      fullTemp: r.trendSeries.map(p => p.supplyTempC),
       meta: { eventAtS, toleranceC: TOLERANCE_C, spTempC: r.state.spTempC },
     };
   });
@@ -342,9 +346,11 @@ function runFailover(params) {
   const [normal, bypass] = runs;
   // 두 실행의 공급온도 궤적이 실제로 얼마나 다른지 — "온도가 안 바뀐다"를
   // 주장하려면 그 차이를 수치로 제시해야 한다.
-  const n = Math.min(normal.trace.temp.length, bypass.trace.temp.length);
+  const n = Math.min(normal.fullTemp.length, bypass.fullTemp.length);
   let maxTempGapC = 0;
-  for (let i = 0; i < n; i++) maxTempGapC = Math.max(maxTempGapC, Math.abs(normal.trace.temp[i] - bypass.trace.temp[i]));
+  for (let i = 0; i < n; i++) maxTempGapC = Math.max(maxTempGapC, Math.abs(normal.fullTemp[i] - bypass.fullTemp[i]));
+  // 표시 계층으로 넘길 필요가 없는 큰 배열은 버린다(트레이스만 남긴다).
+  runs.forEach(r => { delete r.fullTemp; });
 
   return {
     modeId: 'failover',

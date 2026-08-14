@@ -54,7 +54,7 @@ const MODES = [
   { id: 'antiwindup', label: 'Anti-windup', impl: true, panels: ['trend', 'tuning', 'operate', 'automeasure'] },
   { id: 'cascade', label: '캐스케이드 vs 단일루프', impl: true, panels: ['trend', 'tuning', 'operate', 'automeasure'] },
   { id: 'interlock', label: '인터록', impl: true, panels: ['pid', 'electrical', 'pq', 'runtime'] },
-  { id: 'failover', label: '보호·절체', impl: false },
+  { id: 'failover', label: '보호·절체', impl: true, panels: ['pid', 'fault', 'electrical', 'runtime', 'alarms'] },
   { id: 'sensor', label: '센서 열화', impl: false },
   { id: 'full', label: '전체 보기', impl: true, panels: ALL_PANEL_KEYS },
 ];
@@ -222,6 +222,38 @@ const DOCS = {
       <p><b>AVR을 쓰지 않는 이유.</b> 탭체인저 같은 전압조정기는 응답이 수백 ms~수초로 느려
       ms급 sag에는 대응할 수 없다. 그래서 ESS/PCS 무효전력 주입만 쓴다
       (<code>sim-power-quality.js</code> 상단 주석).</p>`,
+  },
+
+  failover: {
+    what: `펌프의 VFD가 고장나면 상용전원 직입(바이패스, DOL)으로 절체된다. 절체된 펌프는 속도 제어를
+      받지 못하고 컨택터가 붙는 순간부터 사실상 정격속도로 고정 운전된다. 그러면 "속도를 조절해
+      유량을 맞춘다"는 제어 전제가 그 펌프에서는 깨진다.
+      이 비교는 고부하 운전 중 P-1의 VFD를 고장내고(@100초), 절체가 없었던 대조군과 나란히 놓는다.
+      <b>봐야 할 것은 최종 온도가 아니라 절체 과정이다</b> — 차트에서 대조군은 3대가 같은 속도라
+      한 줄로 겹쳐 보이고, 절체 후에는 100% 고정 1대와 낮아진 2대로 갈라진다. 그런데도 아래쪽
+      온도선 두 개는 계속 겹쳐 있다.`,
+    detail: `
+      <table>
+        <tr><th>항목</th><th>값</th><th>근거</th></tr>
+        <tr><td>VFD 고장 시각</td><td>100 초</td><td>시나리오 J, 시드 10001</td></tr>
+        <tr><td>부하</td><td>3800 kW 고정 (<code>LOAD_HIGH_KW</code>)</td><td>절체 후 나머지 펌프가 대수제어로 추가 투입되는 상황까지 보려고 고부하로 고정</td></tr>
+        <tr><td>바이패스 고정속도</td><td>100 %</td><td><code>BYPASS_FIXED_SPEED_PCT</code> — DOL은 속도 제어가 없다</td></tr>
+        <tr><td>제어 유지 허용폭</td><td>±2.0 °C</td><td>가정치 — 정상 시나리오의 정상상태편차(대개 0.01°C 미만)보다 훨씬 넉넉하게 잡아 "제어가 살아있는가"만 확인하는 취지</td></tr>
+      </table>
+      <p><b>온도가 안 변한 것 자체가 결과다.</b> 별도의 "바이패스 전용 절체 제어" 로직을 두지
+      않았는데도 공급온도 궤적이 대조군과 사실상 같다. 내부루프가 보는 오차는
+      "설정유량 − 전체유량"인데, 이 전체유량에는 고정속도로 도는 바이패스 펌프의 기여분이 이미
+      포함되어 있다. 그래서 내부루프는 아무 특수 처리 없이 나머지 VFD 펌프의 속도를 낮춰
+      총유량을 맞춘다 — 기존 폐루프 구조가 절체를 그대로 흡수한 것이다
+      (<code>sim-core.js setPumpFeedMode()</code> 주석 참조).</p>
+      <p><b>최종 정상상태 편차를 주지표로 쓰지 않는 이유.</b> 절체 −0.011 °C, 대조군 −0.008 °C로
+      차이가 거의 없어 그 숫자만 보면 절체가 일어났는지조차 알 수 없다. 온도 과도(최대편차·회복시간)도
+      마찬가지다 — 100초 부근의 온도 움직임은 VFD 고장이 아니라 고부하 기동·대수제어 과도이고,
+      대조군에도 똑같이 나타난다. 그래서 실제로 갈리는 펌프 속도와 급전모드를 주지표로 삼고,
+      온도는 "바뀌지 않았다"는 근거로 함께 싣는다.</p>
+      <p><b>보호 리셋은 자동이 아니다.</b> 결상·과부하 트립은 원인이 살아 있으면 리셋이 거부된다.
+      원인 미해소 상태에서 리셋을 허용하면 재기동 즉시 다시 트립되거나 위험한 상태로 운전이
+      계속되기 때문이며, 왼쪽 전기 계통 패널에서 직접 확인할 수 있다.</p>`,
   },
 };
 
@@ -520,6 +552,28 @@ const CHART_SPECS = {
       { label: `관리한계 ${extra.floorPct}%`, data: labels.map(() => extra.floorPct),
         borderColor: c.ref, yAxisID: 'y', ...LINE.ref },
     ],
+  },
+  failover: {
+    // 이 모드의 그림은 속도다 — 대조군은 3대가 같은 속도라 한 줄로 겹쳐 보이고,
+    // 절체 후에는 100% 고정 1대와 낮아진 2대로 갈라진다. 온도는 두 실행이
+    // 겹쳐 보이는 것 자체가 "절체가 온도에 영향을 주지 않았다"의 증거라 함께 얹는다.
+    xTitle: '시뮬레이션 시간 (s)', yTitle: '펌프 속도 (%)', y1Title: '공급온도 (°C)',
+    build: (a, b, c, labels, extra) => {
+      const ds = [];
+      [0, 1, 2].forEach(i => {
+        ds.push({ label: `A · P-${i + 1} 속도`, data: a.trace.speeds[i], borderColor: c.A,
+                  yAxisID: 'y', ...LINE.main });
+      });
+      [0, 1, 2].forEach(i => {
+        ds.push({ label: `B · P-${i + 1} 속도`, data: b.trace.speeds[i], borderColor: c.B,
+                  yAxisID: 'y', ...LINE.mainDash });
+      });
+      ds.push(
+        { label: 'A · 공급온도', data: a.trace.temp, borderColor: c.A, yAxisID: 'y1', ...LINE.sub },
+        { label: 'B · 공급온도', data: b.trace.temp, borderColor: c.B, yAxisID: 'y1', ...LINE.sub },
+      );
+      return ds;
+    },
   },
 };
 
