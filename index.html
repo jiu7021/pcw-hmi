@@ -51,7 +51,19 @@ body{font-family:'Segoe UI',Pretendard,-apple-system,sans-serif;font-size:13px;}
 .topbar .sub{color:var(--text-dim);font-size:11px;}
 
 .grid{display:grid;grid-template-columns:1.5fr 1fr;gap:10px;align-items:start;}
-.col{display:flex;flex-direction:column;gap:10px;}
+.col{display:flex;flex-direction:column;gap:10px;min-width:0;}
+/* min-width:0 근거: .col은 .grid의 그리드 아이템인데, 그리드/플렉스 아이템은
+   기본값이 min-width:auto라 자기 내용물의 min-content 폭 밑으로 못 줄어드는
+   CSS 표준 동작이 있다(흔한 함정). 학습 모드가 트렌드/PQ 차트 패널을
+   hmi-hidden으로 숨겼다 다시 보이면 Chart.js 캔버스의 내부 버퍼 크기가 그
+   순간의 컨테이너 폭을 기준으로 잡히는데, 그 폭 자체가 아직 정착 전이라
+   실제보다 크게 굳어버리는 경우가 있었다 — 이 값이 .col의 min-content
+   폭이 되어 그리드가 좌측 fr 트랙을 그만큼 눌러버린 것이 "전체 보기"에서
+   좌측 컬럼이 눌리던 원인이었다(전체 보기 자체는 학습 모드 클래스를 전혀
+   받지 않는데도 발생 — 원인은 .grid.hmi-onecol이 아니라 이 min-width:auto
+   함정이었다). 0으로 낮춰 그리드가 늘 의도한 fr 비율(1.5:1)로 계산하게
+   한다 — 콘텐츠가 원래 그 폭 안에 들어가는 정상 상태(예: 학습 모드 도입
+   전)에서는 min-width:auto와 결과가 똑같아 픽셀 단위로 아무것도 안 바뀐다. */
 
 .panel{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:10px 12px;}
 .panel h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);
